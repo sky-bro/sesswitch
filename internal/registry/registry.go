@@ -114,6 +114,27 @@ func (s *Store) Delete(id string) error {
 	return err
 }
 
+// Get reads one location without enumerating the registry. Invalid or partially
+// written records are cache misses, as they are in List.
+func (s *Store) Get(id string) (session.Location, bool, error) {
+	path, err := s.path(id)
+	if err != nil {
+		return session.Location{}, false, err
+	}
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return session.Location{}, false, nil
+	}
+	if err != nil {
+		return session.Location{}, false, err
+	}
+	var location session.Location
+	if json.Unmarshal(data, &location) != nil {
+		return session.Location{}, false, nil
+	}
+	return location, true, nil
+}
+
 func (s *Store) List() (map[string]session.Location, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {

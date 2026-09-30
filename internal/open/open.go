@@ -104,6 +104,11 @@ func (codexOpener) Open(ctx context.Context, item session.Session, target string
 		case "Codex Desktop":
 			return run(ctx, "open", "codex://threads/"+item.ID)
 		case "Chrome":
+			if runtime.GOOS == "darwin" && item.BrowserTabID != "" {
+				if err := hosts.FocusChromeTab(ctx, item.BrowserTabID, item.BrowserURL, run); err == nil {
+					return nil
+				}
+			}
 			return run(ctx, "open", "-b", "com.google.Chrome")
 		case "VS Code":
 			return run(ctx, "open", "-b", "com.microsoft.VSCode")

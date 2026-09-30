@@ -16,6 +16,17 @@ func Resolve(ctx context.Context, item session.Session) session.State {
 	return resolve(ctx, item, process.SameIdentityFor)
 }
 
+// ResolveDiscovered is only for a location verified in the current discovery
+// pass. A persisted coordinate alone cannot establish that a session is open.
+func ResolveDiscovered(ctx context.Context, item session.Session, location session.Location) session.State {
+	resolved := Resolve(ctx, item)
+	if resolved.Kind == "saved" {
+		observed := location.LastSeen
+		return session.State{Kind: "session_open", Source: "tmux-process", ObservedAt: &observed}
+	}
+	return resolved
+}
+
 func resolve(ctx context.Context, item session.Session, verify Verifier) session.State {
 	if item.Status == "active" {
 		if slices.Contains(item.ActiveFlags, "waitingOnApproval") {

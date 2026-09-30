@@ -306,3 +306,54 @@ func TestAutoRoutesChromeAndVSCodeToTheirApps(t *testing.T) {
 		})
 	}
 }
+
+func TestAutoFocusesRecordedChromeTab(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Chrome tab focus uses macOS AppleScript")
+	}
+	var got []string
+	run := func(_ context.Context, name string, args ...string) error {
+		got = append([]string{name}, args...)
+		return nil
+	}
+	item := session.Session{
+		Provider:     "codex",
+		ID:           "abc",
+		Source:       "codex-chrome-extension-sidepanel",
+		BrowserTabID: "1882448824",
+		BrowserURL:   "https://example.com/project",
+	}
+	if err := sessionWithRunners(context.Background(), item, "auto", run, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) < 6 || got[0] != "osascript" || got[len(got)-2] != item.BrowserTabID || got[len(got)-1] != item.BrowserURL {
+		t.Fatalf("unexpected focus command: %q", got)
+	}
+}
+
+func TestAutoFallsBackToChromeWhenRecordedTabIsUnavailable(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Chrome tab focus uses macOS AppleScript")
+	}
+	var calls [][]string
+	run := func(_ context.Context, name string, args ...string) error {
+		calls = append(calls, append([]string{name}, args...))
+		if name == "osascript" {
+			return errors.New("tab not found")
+		}
+		return nil
+	}
+	item := session.Session{
+		Provider:     "codex",
+		ID:           "abc",
+		Source:       "codex-chrome-extension-sidepanel",
+		BrowserTabID: "1882448824",
+	}
+	if err := sessionWithRunners(context.Background(), item, "auto", run, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	wantLast := []string{"open", "-b", "com.google.Chrome"}
+	if len(calls) != 2 || !reflect.DeepEqual(calls[1], wantLast) {
+		t.Fatalf("unexpected fallback calls: %q", calls)
+	}
+}

@@ -87,6 +87,10 @@ func sessions(ctx context.Context, limit int) ([]session.Session, error) {
 	if err != nil {
 		return nil, err
 	}
+	return decorateSessions(ctx, items)
+}
+
+func decorateSessions(ctx context.Context, items []session.Session) ([]session.Session, error) {
 	store, err := registry.New()
 	if err != nil {
 		return nil, err
@@ -156,7 +160,14 @@ func sessions(ctx context.Context, limit int) ([]session.Session, error) {
 	for index := range items {
 		if location, ok := discovered[items[index].Key]; ok {
 			items[index].Location = &location
-			items[index].State = state.Resolve(ctx, items[index])
+			registryID, err := registry.Key(items[index].Provider, items[index].ID)
+			if err != nil {
+				return nil, err
+			}
+			if err := store.Put(registryID, location); err != nil {
+				return nil, fmt.Errorf("cache discovered location for %s: %w", items[index].Key, err)
+			}
+			items[index].State = state.ResolveDiscovered(ctx, items[index], location)
 		}
 	}
 	return items, nil
@@ -210,18 +221,99 @@ func openCommand(args []string) error {
 }
 
 func openKey(key, target string) error {
+	if target != "auto" && target != "terminal" && target != "app" {
+		return fmt.Errorf("unsupported target %q", target)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
-	items, err := sessions(ctx, 1000)
+	provider, id, ok := strings.Cut(key, ":")
+	if !ok || provider == "" || id == "" {
+		return fmt.Errorf("unsupported session key %q", key)
+	}
+	if provider != "codex" && provider != "claude" {
+		return fmt.Errorf("unsupported provider %q", provider)
+	}
+	if _, err := registry.Key(provider, id); err != nil {
+		return fmt.Errorf("unsupported session key %q", key)
+	}
+	if target == "auto" {
+		focused, err := focusRegisteredLocation(ctx, provider, id)
+		if err != nil {
+			return err
+		}
+		if focused {
+			return nil
+		}
+	}
+	item, err := sessionByKey(ctx, provider, id)
 	if err != nil {
 		return err
 	}
-	for _, item := range items {
-		if item.Key == key {
-			return openagent.Session(context.Background(), item, target, openagent.CommandRunner)
-		}
+	return openagent.Session(ctx, item, target, openagent.CommandRunner)
+}
+
+func focusRegisteredLocation(ctx context.Context, provider, id string) (bool, error) {
+	return focusRegisteredLocationWith(ctx, provider, id, hosts.Focus)
+}
+
+func focusRegisteredLocationWith(ctx context.Context, provider, id string, focus func(context.Context, session.Location, hosts.Runner, hosts.OutputRunner, hosts.Verifier) error) (bool, error) {
+	store, err := registry.New()
+	if err != nil {
+		return false, err
 	}
-	return fmt.Errorf("session %q was not found", key)
+	registryID, _ := registry.Key(provider, id)
+	location, ok, err := store.Get(registryID)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		location, ok, err = store.Get(id)
+	}
+	if err != nil {
+		return false, err
+	}
+	if !ok || location.Provider != provider || location.AgentPID <= 0 || location.AgentStart == "" || location.TTY == "" {
+		return false, nil
+	}
+	if err := focus(ctx, location, openagent.CommandRunner, openagent.CommandOutputRunner, hosts.VerifyProcess); err == nil {
+		return true, nil
+	} else if !errors.Is(err, openagent.ErrStaleLocation) {
+		return false, fmt.Errorf("could not focus registered location (not resuming automatically): %w", err)
+	}
+	return false, nil
+}
+
+func sessionByKey(ctx context.Context, provider, id string) (session.Session, error) {
+	var item session.Session
+	var err error
+	switch provider {
+	case "codex":
+		item, err = codex.Read(ctx, id)
+	case "claude":
+		var items []session.Session
+		items, err = claude.New().List(ctx, 1000)
+		if err == nil {
+			for _, candidate := range items {
+				if candidate.ID == id {
+					item = candidate
+					break
+				}
+			}
+		}
+	default:
+		return session.Session{}, fmt.Errorf("unsupported provider %q", provider)
+	}
+	if err != nil {
+		return session.Session{}, err
+	}
+	if item.ID == "" {
+		return session.Session{}, fmt.Errorf("session %q was not found", provider+":"+id)
+	}
+	items, err := decorateSessions(ctx, []session.Session{item})
+	if err != nil {
+		return session.Session{}, err
+	}
+	return items[0], nil
 }
 
 func pickCommand(args []string) error {

@@ -33,6 +33,7 @@ function expandHome(path: string): string {
 const preferences = getPreferenceValues<Preferences>();
 const sesswitch = expandHome(preferences.binaryPath?.trim() || "~/.local/bin/sesswitch");
 const organizationStorageKey = "session-organization";
+const sessionsCacheStorageKey = `sessions-cache-v1:${sesswitch}`;
 
 type State = {
   kind: string;
@@ -57,6 +58,16 @@ type Session = {
   location?: Location;
   task?: { kind: string };
 };
+
+function isCachedSession(value: unknown): value is Session {
+  if (!value || typeof value !== "object") return false;
+  const item = value as Session;
+  return typeof item.key === "string" && typeof item.provider === "string" &&
+    typeof item.title === "string" && typeof item.updated_at === "string" &&
+    !!item.state && typeof item.state.kind === "string" && typeof item.state.source === "string" &&
+    (item.cwd === undefined || typeof item.cwd === "string") &&
+    (item.source === undefined || typeof item.source === "string");
+}
 
 type Status = {
   label: string;
@@ -330,7 +341,9 @@ export default function AISessions() {
     setIsLoading(true);
     setError(undefined);
     try {
-      setSessions(await loadSessions());
+      const loaded = await loadSessions();
+      setSessions(loaded);
+      await LocalStorage.setItem(sessionsCacheStorageKey, JSON.stringify(loaded)).catch(() => undefined);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
       setError(message);
@@ -341,7 +354,20 @@ export default function AISessions() {
   }, []);
 
   useEffect(() => {
-    void reload();
+    let cancelled = false;
+    void LocalStorage.getItem<string>(sessionsCacheStorageKey)
+      .then((cached) => {
+        if (!cached || cancelled) return;
+        const parsed = JSON.parse(cached) as Session[];
+        if (Array.isArray(parsed) && parsed.every(isCachedSession)) setSessions(parsed);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) void reload();
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [reload]);
 
   useEffect(() => {

@@ -24,8 +24,8 @@ otherwise Sesswitch resumes the session or uses an available app route.
 The polished launcher integration is currently Vicinae on macOS. The Go CLI and
 JSON boundary are designed for future Raycast and Rofi adapters, but those
 adapters are not shipped yet. Browser and VS Code sessions can be listed when
-the provider exposes them; exact browser-tab or editor-panel focus remains a
-planned host adapter.
+the provider exposes them. Chrome side-panel threads can restore their
+originating tab on macOS; exact editor-panel focus remains planned.
 
 ## Requirements
 
@@ -78,8 +78,9 @@ make install-vicinae-extension
 
 This installs locked npm dependencies, type-checks the extension, and lets
 `vici build` install the local extension into Vicinae. Open **AI Sessions** in
-Vicinae and assign it a direct hotkey in Vicinae settings if you want to bypass
-root search. The extension defaults to `~/.local/bin/sesswitch`; change the
+Vicinae. If it is already running and the command is missing, restart it with
+`vicinae server --replace`. Assign **AI Sessions** a direct hotkey in
+Vicinae settings if you want to bypass root search. The extension defaults to `~/.local/bin/sesswitch`; change the
 **Sesswitch Binary** preference when using another path.
 
 Inside the list:
@@ -136,9 +137,11 @@ unique match of project, pane title, and live provider process. A detached tmux
 session is attached; a duplicate agent process is not started merely because
 pane activation failed.
 
-Chrome side panels and VS Code currently expose no stable conversation
-coordinate, so those routes can focus the application but cannot select the
-exact conversation.
+On macOS, Chrome side-panel sessions focus the originating tab by its recorded
+ID, with an exact URL fallback only when one live tab matches. If the tab cannot
+be resolved or automation is unavailable, Sesswitch raises Chrome. Browser
+context is read on demand from the local Codex rollout, whose format may change.
+VS Code routes currently focus the application rather than the exact panel.
 
 ## Status semantics
 
@@ -148,14 +151,19 @@ A `Stop` event means the current turn ended; it does not mean the user's task
 is complete. A live tmux title containing `Action Required` overrides an older
 turn-ended event. `mark done` is a separate, explicit user judgment.
 
+A tmux session verified during the current listing is shown as `session open`
+when no stronger runtime signal exists. This confirms that its process is live;
+it does not imply that the model is generating.
+
 A newly started Codex app-server may report historical threads as `notLoaded`.
 That means the thread is not loaded in that app-server process, not that the
 session is broken or completed.
 
 ## Privacy and storage
 
-Sesswitch is local-first. It never reads or stores transcript contents. Its
-registry contains session IDs, titles, working directories, process identity,
+Sesswitch is local-first. To open Chrome side-panel sessions, it scans the local
+Codex rollout for selected-tab context; it does not persist transcript contents
+or browser URLs. Its registry contains session IDs, titles, working directories, process identity,
 host coordinates, lifecycle observations, and explicit task marks under
 `~/.local/state/sesswitch/`; private registry files use mode `0600`. Titles and
 previews for Codex are fetched from the local app-server while listing.

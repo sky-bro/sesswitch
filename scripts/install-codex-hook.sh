@@ -54,12 +54,13 @@ jq --arg command "$binary hook codex" --arg legacy_command "$legacy_command" --a
   .hooks //= {} |
   reduce ["SessionStart", "UserPromptSubmit", "PermissionRequest", "PostToolUse", "Stop", "Interrupt", "SessionEnd"][] as $event (
     .;
+    (if $event == "Interrupt" or $event == "SessionEnd" then 3 else 5 end) as $timeout |
     .hooks[$event] //= [] |
     .hooks[$event] |= map(.hooks |= map(select(.command != $legacy_command and .command != $previous_command and .command != $repository_command))) |
     .hooks[$event] |= map(select((.hooks | length) > 0)) |
     if any(.hooks[$event][]?.hooks[]?; .type == "command" and .command == $command)
-    then .
-    else .hooks[$event] += [{"hooks":[{"type":"command","command":$command,"timeout":5}]}]
+    then .hooks[$event] |= map(.hooks |= map(if .type == "command" and .command == $command then .timeout = $timeout else . end))
+    else .hooks[$event] += [{"hooks":[{"type":"command","command":$command,"timeout":$timeout}]}]
     end
   )
 ' "$input" > "$tmp"

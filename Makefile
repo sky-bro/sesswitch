@@ -6,6 +6,7 @@ build:
 
 test:
 	go test ./...
+	bash scripts/test-install-codex-hook.sh
 
 check: test build
 	go vet ./...
@@ -16,6 +17,7 @@ check-vicinae-extension:
 
 install-vicinae-extension:
 	cd extensions/vicinae && npm ci && npm run typecheck && npm run build
+	@echo 'If AI Sessions is missing, restart Vicinae: vicinae server --replace'
 
 install: build
 	mkdir -p "$(HOME)/.local/bin"

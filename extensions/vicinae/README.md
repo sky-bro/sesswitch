@@ -17,6 +17,12 @@ make install
 make install-vicinae-extension
 ```
 
+If Vicinae is already running and **AI Sessions** is missing, restart it with
+`vicinae server --replace`.
+
+The list displays its last successful result immediately and refreshes in the
+background. Cached state may be outdated; opening still verifies the live host.
+
 The extension's **Sesswitch Binary** preference defaults to
 `~/.local/bin/sesswitch` and accepts another absolute path. Assign a direct
 hotkey to **AI Sessions** in Vicinae settings for one-keystroke access.

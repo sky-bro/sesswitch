@@ -76,3 +76,40 @@ func TestLiveTmuxActionRequiredOverridesTurnEndedHook(t *testing.T) {
 		t.Fatalf("unexpected state: %+v", got)
 	}
 }
+
+func TestFreshDiscoveryOnlyPromotesSaved(t *testing.T) {
+	now := time.Now().UTC()
+	location := session.Location{LastSeen: now}
+	for _, test := range []struct {
+		name, status, activity, want string
+		attention                    bool
+	}{
+		{"no hooks", "notLoaded", "", "session_open", false},
+		{"working", "active", "", "working", false},
+		{"approval", "notLoaded", "", "needs_approval", true},
+		{"review", "notLoaded", "turn_ended", "turn_ended", false},
+		{"closed", "notLoaded", "closed", "closed", false},
+		{"error", "systemError", "", "error", false},
+		{"idle", "idle", "", "idle", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			loc := location
+			loc.NeedsAttention = test.attention
+			item := session.Session{Status: test.status, Location: &loc}
+			if test.activity != "" {
+				item.Activity = &session.Activity{Kind: test.activity}
+			}
+			got := ResolveDiscovered(context.Background(), item, loc)
+			if got.Kind != test.want {
+				t.Fatalf("got %+v, want %s", got, test.want)
+			}
+			if test.want == "session_open" && (got.Source != "tmux-process" || got.ObservedAt == nil || !got.ObservedAt.Equal(now)) {
+				t.Fatalf("bad provenance: %+v", got)
+			}
+		})
+	}
+	item := session.Session{Status: "notLoaded", Location: &location}
+	if got := Resolve(context.Background(), item); got.Kind != "saved" {
+		t.Fatalf("persisted location promoted: %+v", got)
+	}
+}

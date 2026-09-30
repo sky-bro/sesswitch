@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sky-bro/sesswitch/internal/hosts"
 	"github.com/sky-bro/sesswitch/internal/registry"
 	"github.com/sky-bro/sesswitch/internal/session"
 )
@@ -165,5 +166,77 @@ func TestClaudeHookIndexesSessionWithoutTranscript(t *testing.T) {
 	}
 	if got := activities["claude--claude-1"]; got.Kind != "needs_approval" {
 		t.Fatalf("unexpected Claude activity: %+v", got)
+	}
+}
+
+func TestRegisteredLocationFastPath(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		focusErr error
+		want     bool
+		wantErr  bool
+	}{
+		{"focused", nil, true, false},
+		{"stale falls back", hosts.ErrStaleLocation, false, false},
+		{"focus failure stops", errors.New("activation denied"), false, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			store, err := registry.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			loc := session.Location{Provider: "codex", TmuxPane: "%7", TTY: "/dev/ttys007", AgentPID: 42, AgentStart: "start"}
+			if err := store.Put("codex--thread-1", loc); err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			focus := func(ctx context.Context, got session.Location, run hosts.Runner, output hosts.OutputRunner, verify hosts.Verifier) error {
+				calls++
+				if got.AgentPID != 42 || verify == nil {
+					t.Fatal("missing process verification")
+				}
+				return test.focusErr
+			}
+			got, err := focusRegisteredLocationWith(context.Background(), "codex", "thread-1", focus)
+			if got != test.want || (err != nil) != test.wantErr || calls != 1 {
+				t.Fatalf("focused=%v err=%v calls=%d", got, err, calls)
+			}
+		})
+	}
+}
+
+func TestRegisteredLocationRejectsUnverifiedOrWrongProvider(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	store, err := registry.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	focus := func(context.Context, session.Location, hosts.Runner, hosts.OutputRunner, hosts.Verifier) error {
+		t.Fatal("unverified location focused")
+		return nil
+	}
+	for _, loc := range []session.Location{
+		{Provider: "codex", TmuxPane: "%7"},
+		{Provider: "claude", TmuxPane: "%7", TTY: "/dev/ttys007", AgentPID: 42, AgentStart: "start"},
+	} {
+		if err := store.Put("codex--thread-1", loc); err != nil {
+			t.Fatal(err)
+		}
+		got, err := focusRegisteredLocationWith(context.Background(), "codex", "thread-1", focus)
+		if got || err != nil {
+			t.Fatalf("focused=%v err=%v", got, err)
+		}
+	}
+}
+
+func TestOpenKeyValidationBeforeLookup(t *testing.T) {
+	for _, key := range []string{"bad", "unknown:id", "codex:../escape", "codex:id:extra"} {
+		if err := openKey(key, "auto"); err == nil {
+			t.Fatalf("accepted %q", key)
+		}
+	}
+	if err := openKey("codex:id", "invalid"); err == nil {
+		t.Fatal("accepted invalid target")
 	}
 }

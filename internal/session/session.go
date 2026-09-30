@@ -41,18 +41,20 @@ type Task struct {
 }
 
 type Session struct {
-	Key         string    `json:"key"`
-	Provider    string    `json:"provider"`
-	ID          string    `json:"id"`
-	SessionID   string    `json:"session_id,omitempty"`
-	Title       string    `json:"title"`
-	CWD         string    `json:"cwd,omitempty"`
-	UpdatedAt   time.Time `json:"updated_at"`
-	Status      string    `json:"status"`
-	ActiveFlags []string  `json:"active_flags,omitempty"`
-	Source      string    `json:"source,omitempty"`
-	Location    *Location `json:"location,omitempty"`
-	Activity    *Activity `json:"activity,omitempty"`
-	State       State     `json:"state"`
-	Task        *Task     `json:"task,omitempty"`
+	Key          string    `json:"key"`
+	Provider     string    `json:"provider"`
+	ID           string    `json:"id"`
+	SessionID    string    `json:"session_id,omitempty"`
+	Title        string    `json:"title"`
+	CWD          string    `json:"cwd,omitempty"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	Status       string    `json:"status"`
+	ActiveFlags  []string  `json:"active_flags,omitempty"`
+	Source       string    `json:"source,omitempty"`
+	BrowserTabID string    `json:"-"`
+	BrowserURL   string    `json:"-"`
+	Location     *Location `json:"location,omitempty"`
+	Activity     *Activity `json:"activity,omitempty"`
+	State        State     `json:"state"`
+	Task         *Task     `json:"task,omitempty"`
 }

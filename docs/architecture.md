@@ -4,8 +4,8 @@ Sesswitch normalizes three independent dimensions:
 
 1. **Provider** — owns session discovery and provider-specific resume behavior
    (`codex`, `claude`).
-2. **Host** — owns the live surface and focus mechanics (`tmux`, `wezterm`,
-   later VS Code, browser, and other terminals).
+2. **Host** — owns the live surface and focus mechanics (`tmux`, `wezterm`, Chrome tabs,
+   later VS Code and other terminals).
 3. **Launcher** — renders and selects normalized sessions (Vicinae today;
    Raycast and Rofi adapters later).
 
@@ -21,7 +21,7 @@ fields so the schema can evolve compatibly.
 - `internal/providers/codex`: Codex app-server transport and normalization.
 - `internal/providers/claude`: hook-observed Claude session catalog adapter.
 - `internal/hosts`: conservative live tmux discovery plus verified tmux and
-  WezTerm focus behavior.
+  WezTerm focus behavior, plus Chrome tab activation.
 - `internal/open`: provider fallback routing after live-host focus is not
   available, plus process execution with stale WezTerm socket recovery.
 - `internal/presentation`: launcher-neutral display fields and the compact
@@ -58,6 +58,28 @@ session rename, without weakening the identity check.
 For a verified live Codex pane, `Action Required` in the terminal title is an
 ephemeral host-state signal. It outranks historical turn-ended hook activity
 and is cleared on the next scan when the title no longer requests action.
+
+## Exact-key opening and Chrome context
+
+Opening in automatic mode first reads the selected registry coordinate and
+verifies its PID, start time, provider, and TTY. A stale process falls back to
+provider lookup; other focus errors stop the operation to avoid duplicate agents.
+Codex lookup uses `thread/read` with `includeTurns: false`, then decorates only
+that thread. A location verified during current tmux discovery promotes only
+the fallback `saved` state to `session_open` and is cached for later opening.
+
+Host-specific browser/Desktop originators take precedence over the generic
+Codex `vscode` source. For Chrome, the provider adapter reads selected-tab context
+on demand from the rollout path returned by `thread/read`. This is a best-effort
+compatibility path for an unstable local format. The host layer focuses the tab
+ID or a unique exact URL match, passing both as AppleScript arguments. Missing,
+ambiguous, unreadable, or denied targets fall back to raising Chrome. Tab context
+is not serialized into registry records or launcher output.
+
+Vicinae caches its last successful session array by binary path and refreshes it
+in the background. Cached runtime state is advisory; opening still performs host
+verification. Browser liveness and the last turn's review state remain separate
+concerns; closing a tab does not currently expire `turn_ended` activity.
 
 ## Adapter contracts
 
