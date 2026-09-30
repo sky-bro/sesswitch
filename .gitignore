@@ -1,0 +1,8 @@
+/bin/
+node_modules/
+*.log
+
+# Local-only reference assets copied from installed applications. The public
+# extension uses the repository-owned SVG instead.
+extensions/vicinae/assets/codex-light.png
+extensions/vicinae/assets/codex-dark.png

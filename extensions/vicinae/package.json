@@ -1,0 +1,42 @@
+{
+  "name": "sesswitch",
+  "title": "Sesswitch",
+  "description": "Find and focus live AI agent sessions",
+  "categories": ["Developer Tools", "Productivity"],
+  "license": "MIT",
+  "author": "sky-bro",
+  "icon": "sesswitch.svg",
+  "commands": [
+    {
+      "name": "ai-sessions",
+      "title": "AI Sessions",
+      "subtitle": "Sesswitch",
+      "description": "Find and focus Codex and Claude sessions",
+      "mode": "view",
+      "icon": "sesswitch.svg",
+      "preferences": [
+        {
+          "name": "binaryPath",
+          "type": "textfield",
+          "required": false,
+          "title": "Sesswitch Binary",
+          "description": "Absolute path to the sesswitch executable",
+          "default": "~/.local/bin/sesswitch"
+        }
+      ]
+    }
+  ],
+  "preferences": [],
+  "scripts": {
+    "build": "vici build",
+    "dev": "vici develop",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@vicinae/api": "^0.29.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.2"
+  }
+}
