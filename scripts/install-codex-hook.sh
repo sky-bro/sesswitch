@@ -56,7 +56,7 @@ jq --arg command "$binary hook codex" --arg legacy_command "$legacy_command" --a
     .;
     (if $event == "Interrupt" or $event == "SessionEnd" then 3 else 5 end) as $timeout |
     .hooks[$event] //= [] |
-    .hooks[$event] |= map(.hooks |= map(select(.command != $legacy_command and .command != $previous_command and .command != $repository_command))) |
+    .hooks[$event] |= map(.hooks |= map(select(.command != $legacy_command and .command != $previous_command and .command != $repository_command and .command != ($repository_command + " codex")))) |
     .hooks[$event] |= map(select((.hooks | length) > 0)) |
     if any(.hooks[$event][]?.hooks[]?; .type == "command" and .command == $command)
     then .hooks[$event] |= map(.hooks |= map(if .type == "command" and .command == $command then .timeout = $timeout else . end))
