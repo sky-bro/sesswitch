@@ -143,6 +143,49 @@ be resolved or automation is unavailable, Sesswitch raises Chrome. Browser
 context is read on demand from the local Codex rollout, whose format may change.
 VS Code routes currently focus the application rather than the exact panel.
 
+## Tool resolution
+
+All launchers use the Go CLI's tool resolver. It chooses executables in this
+order: explicit environment overrides, the user configuration file, the current
+`PATH`, then standard installation directories. `sesswitch doctor` shows the
+selected absolute path and where it came from. Invalid explicit settings fail
+with a diagnostic rather than silently selecting another installation.
+
+The default configuration is `~/.config/sesswitch/config.json`, or
+`$XDG_CONFIG_HOME/sesswitch/config.json`. For example:
+
+```json
+{
+  "tools": {
+    "codex": "~/.local/bin/codex",
+    "claude": "~/.local/bin/claude",
+    "node": "/opt/homebrew/bin/node",
+    "tmux": "/opt/homebrew/bin/tmux",
+    "wezterm": "/Applications/WezTerm.app/Contents/MacOS/wezterm"
+  }
+}
+```
+
+Each entry is optional. `SESSWITCH_CONFIG` selects another configuration file.
+`SESSWITCH_CODEX`, `SESSWITCH_CLAUDE`, `SESSWITCH_NODE`, `SESSWITCH_TMUX`,
+`SESSWITCH_WEZTERM`, and `SESSWITCH_VICINAE` override individual tools; the legacy
+`AGENT_LOCATOR_CODEX` override remains supported. Paths may use `~/`. A bare
+executable name is searched in PATH and standard directories.
+
+Fallback locations include user local/npm prefixes, Homebrew, system binaries,
+the WezTerm app bundle, Volta, and installed Node versions from mise, nvm, asdf,
+and fnm. Within each version manager, numeric versions are tried newest first;
+explicit settings and PATH always take precedence. Shell startup files are not
+sourced, and relative or empty PATH entries are ignored.
+
+List, doctor, focus, and resume share absolute tool paths and an execution PATH
+with the selected Node first. npm agent entrypoints run through that Node;
+missing Node is reported before launching. Native agents do not require Node.
+Commands spawned through an already-running WezTerm receive an absolute command
+and the same PATH and tool/provider configuration locations explicitly, so they
+do not depend on the GUI's original environment.
+Vicinae needs only the Sesswitch binary path.
+
 ## Status semantics
 
 `needs approval`, `working`, `turn ended · review`, `interrupted`, and

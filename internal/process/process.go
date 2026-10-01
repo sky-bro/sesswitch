@@ -4,11 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/sky-bro/sesswitch/internal/toolenv"
 )
 
 // Info contains only process identity and terminal coordinates, never argv.
@@ -24,7 +25,11 @@ func Inspect(ctx context.Context, pid int) (Info, error) {
 	if pid <= 0 {
 		return Info{}, fmt.Errorf("invalid PID %d", pid)
 	}
-	data, err := exec.CommandContext(ctx, "ps", "-p", strconv.Itoa(pid), "-o", "ppid=,tty=,lstart=,comm=").Output()
+	cmd, err := toolenv.Command(ctx, "ps", "-p", strconv.Itoa(pid), "-o", "ppid=,tty=,lstart=,comm=")
+	if err != nil {
+		return Info{}, err
+	}
+	data, err := cmd.Output()
 	if err != nil {
 		return Info{}, fmt.Errorf("inspect PID %d: %w", pid, err)
 	}
@@ -131,7 +136,11 @@ func AgentInfoAtTTY(ctx context.Context, tty, provider string) (Info, bool, erro
 	if tty == "" {
 		return Info{}, false, nil
 	}
-	data, err := exec.CommandContext(ctx, "ps", "-t", strings.TrimPrefix(tty, "/dev/"), "-o", "pid=,ppid=,tty=,lstart=,comm=").Output()
+	cmd, err := toolenv.Command(ctx, "ps", "-t", strings.TrimPrefix(tty, "/dev/"), "-o", "pid=,ppid=,tty=,lstart=,comm=")
+	if err != nil {
+		return Info{}, false, err
+	}
+	data, err := cmd.Output()
 	if err != nil {
 		return Info{}, false, fmt.Errorf("inspect TTY %s: %w", tty, err)
 	}

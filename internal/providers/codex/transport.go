@@ -9,6 +9,8 @@ import (
 	"io"
 	"os/exec"
 	"strings"
+
+	"github.com/sky-bro/sesswitch/internal/toolenv"
 )
 
 // appServer owns one stdio transport. Callers handle operation-specific replies
@@ -23,7 +25,11 @@ type appServer struct {
 }
 
 func startAppServer(ctx context.Context) (*appServer, error) {
-	rpc := &appServer{cmd: exec.CommandContext(ctx, executable(), "app-server", "--listen", "stdio://")}
+	cmd, err := toolenv.Command(ctx, "codex", "app-server", "--listen", "stdio://")
+	if err != nil {
+		return nil, err
+	}
+	rpc := &appServer{cmd: cmd}
 	stdin, err := rpc.cmd.StdinPipe()
 	if err != nil {
 		return nil, err

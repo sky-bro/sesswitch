@@ -5,12 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"runtime"
 	"strings"
 
 	"github.com/sky-bro/sesswitch/internal/hosts"
 	"github.com/sky-bro/sesswitch/internal/session"
+	"github.com/sky-bro/sesswitch/internal/toolenv"
 )
 
 type Runner = hosts.Runner
@@ -20,14 +20,20 @@ type Verifier = hosts.Verifier
 var ErrStaleLocation = hosts.ErrStaleLocation
 
 func CommandRunner(ctx context.Context, name string, args ...string) error {
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Env = commandEnvironment(name, os.Environ(), wezTermSocketExists)
+	cmd, err := toolenv.Command(ctx, name, args...)
+	if err != nil {
+		return err
+	}
+	cmd.Env = commandEnvironment(name, cmd.Env, wezTermSocketExists)
 	return cmd.Run()
 }
 
 func CommandOutputRunner(ctx context.Context, name string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Env = commandEnvironment(name, os.Environ(), wezTermSocketExists)
+	cmd, err := toolenv.Command(ctx, name, args...)
+	if err != nil {
+		return nil, err
+	}
+	cmd.Env = commandEnvironment(name, cmd.Env, wezTermSocketExists)
 	return cmd.Output()
 }
 
@@ -69,7 +75,7 @@ func wezTermSocketExists(path string) bool {
 }
 
 func Session(ctx context.Context, item session.Session, target string, run Runner) error {
-	return sessionWithRunners(ctx, item, target, run, CommandOutputRunner, hosts.VerifyProcess)
+	return sessionWithRunners(toolenv.Context(ctx), item, target, run, CommandOutputRunner, hosts.VerifyProcess)
 }
 
 func sessionWithRunners(ctx context.Context, item session.Session, target string, run Runner, output OutputRunner, verify Verifier) error {

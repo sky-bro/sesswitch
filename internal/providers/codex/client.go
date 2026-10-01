@@ -64,17 +64,6 @@ func (Adapter) List(ctx context.Context, limit int) ([]session.Session, error) {
 	return List(ctx, limit)
 }
 
-func executable() string {
-	name := os.Getenv("SESSWITCH_CODEX")
-	if name == "" {
-		name = os.Getenv("AGENT_LOCATOR_CODEX") // pre-rename compatibility
-	}
-	if name == "" {
-		name = "codex"
-	}
-	return name
-}
-
 func List(ctx context.Context, limit int) ([]session.Session, error) {
 	if limit < 1 {
 		return nil, fmt.Errorf("limit must be positive")

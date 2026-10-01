@@ -32,6 +32,8 @@ fields so the schema can evolve compatibly.
 - `internal/registry`: provider-scoped location, activity, and explicit task
   state.
 - `internal/state`: converts raw runtime observations into user-facing state.
+- `internal/toolenv`: immutable tool selections and child-process environment,
+  shared through context by CLI operations, providers, and hosts.
 
 Registry filenames use `<provider>--<session-id>` so equal native IDs from two
 providers cannot collide. Reads retain compatibility with the original
@@ -58,6 +60,22 @@ session rename, without weakening the identity check.
 For a verified live Codex pane, `Action Required` in the terminal title is an
 ephemeral host-state signal. It outranks historical turn-ended hook activity
 and is cleared on the next scan when the title no longer requests action.
+
+## Execution environment
+
+`internal/toolenv` resolves configured executables, inherited PATH entries, and
+standard installation directories once per CLI operation. Process commands are
+constructed only through this package; provider and host adapters use the same
+context snapshot. Selection errors are retained for doctor and execution, so a
+bad explicit path cannot be hidden by a fallback.
+
+The execution PATH places the selected Node first and includes selected tool
+directories and fallback directories. Node-shebang agent entrypoints are invoked
+through the selected absolute Node interpreter. WezTerm start/spawn commands
+carry an absolute child command, explicit PATH, and tool/provider configuration
+locations via `env`, since an existing
+GUI can spawn children using its own older environment. The existing stale
+WezTerm socket filter remains scoped to WezTerm calls.
 
 ## Exact-key opening and Chrome context
 

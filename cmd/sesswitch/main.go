@@ -24,6 +24,7 @@ import (
 	"github.com/sky-bro/sesswitch/internal/registry"
 	"github.com/sky-bro/sesswitch/internal/session"
 	"github.com/sky-bro/sesswitch/internal/state"
+	"github.com/sky-bro/sesswitch/internal/toolenv"
 )
 
 const version = "0.1.0"
@@ -183,7 +184,7 @@ func listCommand(args []string, stdout io.Writer) error {
 	if *limit < 1 || *limit > 1000 {
 		return errors.New("limit must be between 1 and 1000")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	ctx, cancel := context.WithTimeout(toolenv.Context(context.Background()), 12*time.Second)
 	defer cancel()
 	items, err := sessions(ctx, *limit)
 	if err != nil {
@@ -224,7 +225,7 @@ func openKey(key, target string) error {
 	if target != "auto" && target != "terminal" && target != "app" {
 		return fmt.Errorf("unsupported target %q", target)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	ctx, cancel := context.WithTimeout(toolenv.Context(context.Background()), 12*time.Second)
 	defer cancel()
 	provider, id, ok := strings.Cut(key, ":")
 	if !ok || provider == "" || id == "" {
@@ -322,7 +323,7 @@ func pickCommand(args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	ctx, cancel := context.WithTimeout(toolenv.Context(context.Background()), 12*time.Second)
 	defer cancel()
 	items, err := sessions(ctx, 1000)
 	if err != nil {
@@ -335,7 +336,10 @@ func pickCommand(args []string) error {
 	for _, item := range items {
 		fmt.Fprintln(&input, presentation.New(item).Line())
 	}
-	cmd := exec.Command("vicinae", "dmenu", "--format", "index", "--navigation-title", "AI Sessions", "--section-title", "Sessions ({count})", "--placeholder", "Search sessions, projects, or agents", "--width", "920", "--height", "640", "--no-metadata")
+	cmd, err := toolenv.Command(context.WithoutCancel(ctx), "vicinae", "dmenu", "--format", "index", "--navigation-title", "AI Sessions", "--section-title", "Sessions ({count})", "--placeholder", "Search sessions, projects, or agents", "--width", "920", "--height", "640", "--no-metadata")
+	if err != nil {
+		return err
+	}
 	cmd.Stdin = &input
 	output, err := cmd.Output()
 	if err != nil {
@@ -349,7 +353,7 @@ func pickCommand(args []string) error {
 	if err != nil || index < 0 || index >= len(items) {
 		return fmt.Errorf("invalid Vicinae selection %q", strings.TrimSpace(string(output)))
 	}
-	return openagent.Session(context.Background(), items[index], *target, openagent.CommandRunner)
+	return openagent.Session(context.WithoutCancel(ctx), items[index], *target, openagent.CommandRunner)
 }
 
 func markCommand(args []string) error {
@@ -397,7 +401,8 @@ func renameCommand(args []string) error {
 		return fmt.Errorf("rename is not supported for provider %q", provider)
 	}
 	key := args[0]
-	lookupCtx, cancelLookup := context.WithTimeout(context.Background(), 12*time.Second)
+	baseCtx := toolenv.Context(context.Background())
+	lookupCtx, cancelLookup := context.WithTimeout(baseCtx, 12*time.Second)
 	items, err := sessions(lookupCtx, 1000)
 	cancelLookup()
 	if err != nil {
@@ -417,7 +422,7 @@ func renameCommand(args []string) error {
 		return fmt.Errorf("preserve session location: %w", err)
 	}
 
-	renameCtx, cancelRename := context.WithTimeout(context.Background(), 12*time.Second)
+	renameCtx, cancelRename := context.WithTimeout(baseCtx, 12*time.Second)
 	defer cancelRename()
 	return codex.Rename(renameCtx, id, args[1])
 }
@@ -498,7 +503,7 @@ func providerHookCommand(provider string, stdin io.Reader) error {
 			return err
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(toolenv.Context(context.Background()), 2*time.Second)
 	defer cancel()
 	agent, err := process.AgentAncestor(ctx, provider)
 	if activityKind != "" {
@@ -587,36 +592,63 @@ func tmuxPaneAtTTY(ctx context.Context, tty string, output openagent.OutputRunne
 }
 
 func doctorCommand(stdout io.Writer) error {
+	resolver := toolenv.New()
+	ctx := toolenv.WithResolver(context.Background(), resolver)
 	failed := false
-	for _, name := range []string{"tmux", "wezterm", "vicinae"} {
-		path, err := exec.LookPath(name)
+	for _, name := range []string{"tmux", "wezterm", "vicinae", "ps", "env"} {
+		selected, err := resolver.Resolve(name)
 		if err != nil {
-			fmt.Fprintf(stdout, "missing  %s\n", name)
+			fmt.Fprintf(stdout, "missing  %s (%v)\n", name, err)
 			failed = true
 		} else {
-			fmt.Fprintf(stdout, "ok       %s (%s)\n", name, path)
+			fmt.Fprintf(stdout, "ok       %s (%s; %s)\n", name, selected.Path, selected.Source)
 		}
 	}
+	node, nodeErr := resolver.Resolve("node")
+	if nodeErr != nil {
+		status := "optional"
+		if errors.Is(nodeErr, toolenv.ErrConfiguration) {
+			status = "failed"
+			failed = true
+		}
+		fmt.Fprintf(stdout, "%s node (%v; needed by npm agents)\n", status, nodeErr)
+	} else {
+		fmt.Fprintf(stdout, "ok       node (%s; %s)\n", node.Path, node.Source)
+	}
 	providersFound := 0
+	codexAvailable := false
 	for _, name := range []string{"codex", "claude"} {
-		path, err := exec.LookPath(name)
+		selected, err := resolver.Resolve(name)
 		if err != nil {
-			fmt.Fprintf(stdout, "optional %s (not installed)\n", name)
+			status := "optional"
+			if errors.Is(err, toolenv.ErrConfiguration) {
+				status = "failed"
+				failed = true
+			}
+			fmt.Fprintf(stdout, "%s %s (%v)\n", status, name, err)
+			continue
+		}
+		if err := resolver.Check(name); err != nil {
+			fmt.Fprintf(stdout, "failed   %s (%s; %v)\n", name, selected.Path, err)
+			failed = true
 			continue
 		}
 		providersFound++
-		fmt.Fprintf(stdout, "ok       %s (%s)\n", name, path)
+		if name == "codex" {
+			codexAvailable = true
+		}
+		fmt.Fprintf(stdout, "ok       %s (%s; %s)\n", name, selected.Path, selected.Source)
 	}
 	if providersFound == 0 {
-		fmt.Fprintln(stdout, "failed   no supported provider installed (codex or claude)")
+		fmt.Fprintln(stdout, "failed   no usable provider installed (codex or claude)")
 		failed = true
 	}
-	if _, err := exec.LookPath("codex"); err == nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	if codexAvailable {
+		lookupCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 		defer cancel()
-		items, listErr := codex.List(ctx, 1)
-		if listErr != nil {
-			fmt.Fprintf(stdout, "failed   Codex app-server (%v)\n", listErr)
+		items, err := codex.List(lookupCtx, 1)
+		if err != nil {
+			fmt.Fprintf(stdout, "failed   Codex app-server (%v)\n", err)
 			failed = true
 		} else {
 			fmt.Fprintf(stdout, "ok       Codex app-server (%d session sampled)\n", len(items))
