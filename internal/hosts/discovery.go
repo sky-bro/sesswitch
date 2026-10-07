@@ -31,6 +31,7 @@ func DiscoverTmuxLocations(ctx context.Context, items []session.Session, output 
 		return result
 	}
 	panes := parseTmuxPanes(string(data))
+	claims := make(map[string][]session.Session)
 	for _, item := range items {
 		if item.Key == "" {
 			continue
@@ -45,7 +46,7 @@ func DiscoverTmuxLocations(ctx context.Context, items []session.Session, output 
 				if item.Location.TmuxPane != pane.id {
 					continue
 				}
-			} else if item.Title == "" || item.CWD == "" || !samePath(item.CWD, pane.cwd) || !paneTitleMatches(pane.title, item.Title) {
+			} else if item.Title == "" || item.CWD == "" || !samePath(item.CWD, pane.cwd) || !paneTitleMatches(conversationTitle(pane), item.Title) {
 				continue
 			}
 			info, found, err := agentAtTTY(ctx, pane.tty, item.Provider)
@@ -68,9 +69,47 @@ func DiscoverTmuxLocations(ctx context.Context, items []session.Session, output 
 		}
 		if len(matches) == 1 {
 			result[item.Key] = matches[0]
+			claims[matches[0].TmuxPane] = append(claims[matches[0].TmuxPane], item)
+		}
+	}
+	// A live process proves the pane is occupied, not which historical thread
+	// owns it. Resolve competing leases only with a unique conversation title.
+	for _, pane := range panes {
+		owners := claims[pane.id]
+		if len(owners) < 2 {
+			continue
+		}
+		winner := ""
+		matches := 0
+		for _, owner := range owners {
+			if samePath(owner.CWD, pane.cwd) && paneTitleMatches(conversationTitle(pane), owner.Title) {
+				winner = owner.Key
+				matches++
+			}
+		}
+		for _, owner := range owners {
+			if matches != 1 || owner.Key != winner {
+				delete(result, owner.Key)
+			}
 		}
 	}
 	return result
+}
+
+// Codex appends the project name and optionally its path to the conversation.
+// Strip that suffix before matching, so a cwd-derived title cannot claim it.
+func conversationTitle(pane tmuxPane) string {
+	parts := strings.Split(pane.title, "|")
+	if len(parts) > 1 {
+		last := strings.TrimSpace(parts[len(parts)-1])
+		if strings.Contains(last, "/") {
+			parts = parts[:len(parts)-1]
+		}
+	}
+	if len(parts) > 1 && strings.TrimSpace(parts[len(parts)-1]) == filepath.Base(pane.cwd) {
+		parts = parts[:len(parts)-1]
+	}
+	return strings.Join(parts, "|")
 }
 
 func paneNeedsAttention(title string) bool {

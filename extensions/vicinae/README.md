@@ -20,8 +20,16 @@ make install-vicinae-extension
 If Vicinae is already running and **AI Sessions** is missing, restart it with
 `vicinae server --replace`.
 
-The list displays its last successful result immediately and refreshes in the
-background. Cached state may be outdated; opening still verifies the live host.
+The list displays its last successful result immediately, then subscribes to
+`sesswitch watch`. The subscription fetches a fresh catalog once and streams
+local hook/mark changes as JSON snapshots. There is no periodic polling.
+Provider failures retain cached sessions with a visible warning. If the stream
+stops, use Refresh Sessions to reconnect. Hosts without lifecycle hooks update
+only on open or manual refresh; opening always verifies the target's live host.
+
+Use `⌘⇧R` to mark a completed turn read and remove its review reminder. A later
+turn can request review again. `⌘⇧D` marks a task done; new agent activity reopens
+it so future approval requests are not hidden.
 
 The extension's **Sesswitch Binary** preference defaults to
 `~/.local/bin/sesswitch` and accepts another absolute path. Assign a direct
@@ -42,7 +50,9 @@ copy:
 npm run build -- --out /tmp/sesswitch-vicinae
 ```
 
-The Codex mark is a repository-owned compatibility glyph, not an OpenAI logo.
-The Claude and tmux marks come from Simple Icons; those names and marks remain
+The Codex icons come from the official desktop application's
+`icon-codex-light.png` and `icon-codex-dark-color.png` resources, and switch
+with the launcher's light or dark theme. The Claude and tmux marks come from
+Simple Icons; those names and marks remain
 the property of their respective owners. Their use identifies compatible
 services and does not imply endorsement.

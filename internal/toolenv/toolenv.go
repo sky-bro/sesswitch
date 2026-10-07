@@ -173,6 +173,12 @@ func (resolver *Resolver) invocation(name string, args []string) (string, []stri
 	if err != nil {
 		return "", nil, err
 	}
+	if name == "tmux" {
+		// GUI launchers may have no UTF-8 locale. Without -u, tmux replaces
+		// tabs in format output with underscores, breaking pane discovery and
+		// focus parsing, and can also mangle non-ASCII session names.
+		return selected.Path, append([]string{"-u"}, args...), nil
+	}
 	if name == "codex" || name == "claude" {
 		flags, needsNode, err := nodeShebang(selected.Path)
 		if err != nil {

@@ -64,6 +64,40 @@ func TestTurnEndedIsNotTaskCompleted(t *testing.T) {
 	}
 }
 
+func TestTerminalReviewRequiresLiveProcess(t *testing.T) {
+	for _, fromLocation := range []bool{false, true} {
+		for _, test := range []struct {
+			name string
+			same bool
+			err  error
+			want string
+		}{
+			{"live or detached", true, nil, "turn_ended"},
+			{"exited or PID reused", false, nil, "closed"},
+			{"inspection unavailable", false, errors.New("ps failed"), "saved"},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				item := session.Session{Provider: "codex", Status: "notLoaded",
+					Activity: &session.Activity{Kind: "turn_ended", Source: "codex-hook:Stop"}}
+				if fromLocation {
+					item.Location = &session.Location{Kind: "tmux", AgentPID: 123, AgentStart: "start"}
+				} else {
+					item.Activity.AgentPID, item.Activity.AgentStart = 123, "start"
+				}
+				verify := func(_ context.Context, pid int, start, provider string) (process.Info, bool, error) {
+					if pid != 123 || start != "start" || provider != "codex" {
+						t.Fatalf("wrong identity: %d %s %s", pid, start, provider)
+					}
+					return process.Info{}, test.same, test.err
+				}
+				if got := resolve(context.Background(), item, verify); got.Kind != test.want {
+					t.Fatalf("got %+v, want %s", got, test.want)
+				}
+			})
+		}
+	}
+}
+
 func TestLiveTmuxActionRequiredOverridesTurnEndedHook(t *testing.T) {
 	now := time.Now().UTC()
 	item := session.Session{

@@ -15,6 +15,30 @@ type Adapter interface {
 	List(context.Context, int) ([]session.Session, error)
 }
 
+type Result struct {
+	Provider string
+	Sessions []session.Session
+	Err      error
+}
+
+// Collect queries providers independently and preserves adapter order in its
+// results, so one unavailable provider cannot discard another one's catalog.
+func Collect(ctx context.Context, adapters []Adapter, limit int) []Result {
+	results := make([]Result, len(adapters))
+	done := make(chan int, len(adapters))
+	for i, adapter := range adapters {
+		go func(index int, adapter Adapter) {
+			items, err := adapter.List(ctx, limit)
+			results[index] = Result{Provider: adapter.Name(), Sessions: items, Err: err}
+			done <- index
+		}(i, adapter)
+	}
+	for range adapters {
+		<-done
+	}
+	return results
+}
+
 func List(ctx context.Context, adapters []Adapter, limit int) ([]session.Session, error) {
 	if limit < 1 {
 		return nil, fmt.Errorf("limit must be positive")

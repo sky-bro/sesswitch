@@ -81,7 +81,7 @@ func TestFocusTmuxPaneThroughItsWezTermClient(t *testing.T) {
 		switch name {
 		case "tmux":
 			if args[0] == "display-message" {
-				return []byte("work\t/dev/ttys015\n"), nil
+				return []byte("$3\t/dev/ttys015\n"), nil
 			}
 			return []byte("/dev/ttys000\n"), nil
 		default:
@@ -97,7 +97,7 @@ func TestFocusTmuxPaneThroughItsWezTermClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := [][]string{
-		{"tmux", "display-message", "-p", "-t", "%17", "#{session_name}\t#{pane_tty}"},
+		{"tmux", "display-message", "-p", "-t", "%17", "#{session_id}\t#{pane_tty}"},
 		{"wezterm", "cli", "list", "--format", "json"},
 		{"tmux", "list-clients", "-F", "#{client_tty}"},
 		{"tmux", "switch-client", "-c", "/dev/ttys000", "-t", "%17"},
@@ -121,7 +121,7 @@ func TestDetachedTmuxSessionAttachesInExistingWezTermWindow(t *testing.T) {
 		calls = append(calls, append([]string{name}, args...))
 		if name == "tmux" {
 			if args[0] == "display-message" {
-				return []byte("detached\t/dev/ttys015\n"), nil
+				return []byte("$4\t/dev/ttys015\n"), nil
 			}
 			return nil, context.Canceled
 		}
@@ -139,12 +139,12 @@ func TestDetachedTmuxSessionAttachesInExistingWezTermWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := [][]string{
-		{"tmux", "display-message", "-p", "-t", "%17", "#{session_name}\t#{pane_tty}"},
+		{"tmux", "display-message", "-p", "-t", "%17", "#{session_id}\t#{pane_tty}"},
 		{"wezterm", "cli", "list", "--format", "json"},
 		{"tmux", "list-clients", "-F", "#{client_tty}"},
 		{"tmux", "select-window", "-t", "%17"},
 		{"tmux", "select-pane", "-t", "%17"},
-		{"wezterm", "cli", "spawn", "--window-id", "2", "--", "tmux", "attach-session", "-t", "detached"},
+		{"wezterm", "cli", "spawn", "--window-id", "2", "--", "tmux", "attach-session", "-t", "$4"},
 		{"wezterm", "cli", "activate-pane", "--pane-id", "12"},
 	}
 	if runtime.GOOS == "darwin" {
@@ -182,7 +182,7 @@ func TestDetachedTmuxSessionStartsWezTermOnlyWhenNoneExists(t *testing.T) {
 	output := func(_ context.Context, name string, args ...string) ([]byte, error) {
 		calls = append(calls, append([]string{name}, args...))
 		if name == "tmux" && args[0] == "display-message" {
-			return []byte("detached\t/dev/ttys015\n"), nil
+			return []byte("$4\t/dev/ttys015\n"), nil
 		}
 		return nil, errors.New("no GUI/client")
 	}
@@ -194,7 +194,7 @@ func TestDetachedTmuxSessionStartsWezTermOnlyWhenNoneExists(t *testing.T) {
 	if err := sessionWithRunners(context.Background(), item, "auto", run, output, acceptLocation); err != nil {
 		t.Fatal(err)
 	}
-	wantLast := []string{"wezterm", "start", "--", "tmux", "attach-session", "-t", "detached"}
+	wantLast := []string{"wezterm", "start", "--", "tmux", "attach-session", "-t", "$4"}
 	if got := calls[len(calls)-1]; !reflect.DeepEqual(got, wantLast) {
 		t.Fatalf("last call got %q, want %q", got, wantLast)
 	}
@@ -211,7 +211,7 @@ func TestFocusFailureDoesNotResumeDuplicate(t *testing.T) {
 	}
 	output := func(_ context.Context, name string, args ...string) ([]byte, error) {
 		if name == "tmux" && args[0] == "display-message" {
-			return []byte("work\t/dev/ttys015\n"), nil
+			return []byte("$3\t/dev/ttys015\n"), nil
 		}
 		if name == "tmux" {
 			return []byte("/dev/ttys000\n"), nil
@@ -232,7 +232,7 @@ func TestStaleLocationResumes(t *testing.T) {
 		return nil
 	}
 	output := func(_ context.Context, _ string, _ ...string) ([]byte, error) {
-		return []byte("work\t/dev/ttys015\n"), nil
+		return []byte("$3\t/dev/ttys015\n"), nil
 	}
 	item := session.Session{Provider: "codex", ID: "abc", Location: &session.Location{Kind: "tmux", TmuxPane: "%17"}}
 	verify := func(context.Context, session.Location, string) error { return ErrStaleLocation }

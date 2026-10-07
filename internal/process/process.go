@@ -21,6 +21,54 @@ type Info struct {
 	Comm  string
 }
 
+// Snapshot reads process identities once per explicit listing. Verification at
+// the moment of opening still uses Inspect, so a cached snapshot cannot focus
+// an unrelated process.
+type Snapshot struct {
+	byPID map[int]Info
+	raw   string
+	err   error
+}
+
+func Capture(ctx context.Context) Snapshot {
+	cmd, err := toolenv.Command(ctx, "ps", "-axo", "pid=,ppid=,tty=,lstart=,comm=")
+	if err != nil {
+		return Snapshot{err: err}
+	}
+	data, err := cmd.Output()
+	s := Snapshot{byPID: make(map[int]Info), raw: string(data), err: err}
+	for _, line := range strings.Split(s.raw, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 9 {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[0])
+		if err != nil {
+			continue
+		}
+		info, err := Parse(pid, strings.Join(fields[1:], " "))
+		if err == nil {
+			s.byPID[pid] = info
+		}
+	}
+	return s
+}
+
+func (s Snapshot) Verify(_ context.Context, pid int, start, provider string) (Info, bool, error) {
+	if s.err != nil {
+		return Info{}, false, s.err
+	}
+	info, found := s.byPID[pid]
+	return info, found && IsAgent(info, provider) && info.Start == start, nil
+}
+
+func (s Snapshot) AgentAtTTY(_ context.Context, tty, provider string) (Info, bool, error) {
+	if s.err != nil {
+		return Info{}, false, s.err
+	}
+	return agentFromTTYOutput(s.raw, NormalizeTTY(tty), provider)
+}
+
 func Inspect(ctx context.Context, pid int) (Info, error) {
 	if pid <= 0 {
 		return Info{}, fmt.Errorf("invalid PID %d", pid)
@@ -144,7 +192,13 @@ func AgentInfoAtTTY(ctx context.Context, tty, provider string) (Info, bool, erro
 	if err != nil {
 		return Info{}, false, fmt.Errorf("inspect TTY %s: %w", tty, err)
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	return agentFromTTYOutput(string(data), tty, provider)
+}
+
+func agentFromTTYOutput(data, tty, provider string) (Info, bool, error) {
+	processes := make(map[int]Info)
+	var candidates []Info
+	for _, line := range strings.Split(data, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 9 {
 			continue
@@ -154,9 +208,39 @@ func AgentInfoAtTTY(ctx context.Context, tty, provider string) (Info, bool, erro
 			continue
 		}
 		info, err := Parse(pid, strings.Join(fields[1:], " "))
-		if err == nil && IsAgent(info, provider) {
-			return info, true, nil
+		if err == nil && info.TTY == tty {
+			processes[info.PID] = info
+			if IsAgent(info, provider) {
+				candidates = append(candidates, info)
+			}
 		}
 	}
+	// Codex helper agents inherit the interactive CLI's TTY. Select the root
+	// agent rather than whichever helper happens to appear first in ps output.
+	var roots []Info
+	for _, candidate := range candidates {
+		parent := candidate.PPID
+		seen := map[int]bool{candidate.PID: true}
+		nested := false
+		for !seen[parent] {
+			seen[parent] = true
+			ancestor, ok := processes[parent]
+			if !ok {
+				break
+			}
+			if IsAgent(ancestor, provider) {
+				nested = true
+				break
+			}
+			parent = ancestor.PPID
+		}
+		if !nested {
+			roots = append(roots, candidate)
+		}
+	}
+	if len(roots) == 1 {
+		return roots[0], true, nil
+	}
+	// Independent agents on one TTY are ambiguous; never guess an owner.
 	return Info{}, false, nil
 }

@@ -82,7 +82,9 @@ func List(ctx context.Context, limit int) ([]session.Session, error) {
 		if pageSize > 100 {
 			pageSize = 100
 		}
-		params := map[string]any{"limit": pageSize, "sortKey": "updated_at", "sortDirection": "desc"}
+		// An omitted provider filter restricts history to the current model
+		// provider. Include sessions created under other provider configurations.
+		params := map[string]any{"limit": pageSize, "sortKey": "updated_at", "sortDirection": "desc", "modelProviders": []string{}}
 		if cursor != "" {
 			params["cursor"] = cursor
 		}

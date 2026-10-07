@@ -35,9 +35,10 @@ type State struct {
 
 // Task is an explicit user judgment, independent of agent runtime events.
 type Task struct {
-	Kind      string    `json:"kind"`
-	Source    string    `json:"source"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Kind        string     `json:"kind"`
+	Source      string     `json:"source"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	ReadThrough *time.Time `json:"read_through,omitempty"`
 }
 
 type Session struct {

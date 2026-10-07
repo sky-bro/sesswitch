@@ -108,3 +108,50 @@ func TestDiscoverTmuxRejectsReusedRegisteredPane(t *testing.T) {
 		t.Fatalf("reused pane should not refresh a stale lease: %#v", got)
 	}
 }
+
+func TestDiscoverTmuxProjectSuffixDoesNotClaimPane(t *testing.T) {
+	for _, title := range []string{
+		"⠸ 比较米家与HA自动化依赖 | home-lab",
+		"[ ! ] Action Required | 比较米家与HA自动化依赖 | home-lab | ~/repos/home-lab",
+	} {
+		t.Run(title, func(t *testing.T) {
+			items := []session.Session{
+				{Key: "codex:old", Provider: "codex", Title: "home-lab", CWD: "/tmp/home-lab"},
+				{Key: "codex:current", Provider: "codex", Title: "比较米家与HA自动化依赖", CWD: "/tmp/home-lab"},
+			}
+			output := func(context.Context, string, ...string) ([]byte, error) {
+				return []byte("%0\t/dev/ttys001\t/tmp/home-lab\t" + title + "\n"), nil
+			}
+			agent := func(_ context.Context, tty, _ string) (process.Info, bool, error) {
+				return process.Info{PID: 42, TTY: tty, Start: "start"}, true, nil
+			}
+			for _, registered := range []bool{false, true} {
+				if registered {
+					for i := range items {
+						items[i].Location = &session.Location{Kind: "tmux", TmuxPane: "%0", AgentPID: 42, AgentStart: "start"}
+					}
+				}
+				got := DiscoverTmuxLocations(context.Background(), items, output, agent)
+				if len(got) != 1 || got["codex:current"].TmuxPane != "%0" {
+					t.Fatalf("registered=%v: unexpected claims: %#v", registered, got)
+				}
+			}
+		})
+	}
+}
+
+func TestDiscoverTmuxRejectsCompetingThreadsWithSameTitle(t *testing.T) {
+	items := []session.Session{
+		{Key: "codex:a", Provider: "codex", Title: "Same", CWD: "/tmp/repo"},
+		{Key: "codex:b", Provider: "codex", Title: "Same", CWD: "/tmp/repo"},
+	}
+	output := func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("%0\t/dev/ttys001\t/tmp/repo\tSame | repo\n"), nil
+	}
+	agent := func(_ context.Context, tty, _ string) (process.Info, bool, error) {
+		return process.Info{PID: 42, TTY: tty, Start: "start"}, true, nil
+	}
+	if got := DiscoverTmuxLocations(context.Background(), items, output, agent); len(got) != 0 {
+		t.Fatalf("competing threads must not share a pane: %#v", got)
+	}
+}

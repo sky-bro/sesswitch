@@ -75,6 +75,8 @@ func statePresentation(item session.Session) (string, string) {
 		return "🔵", "Working"
 	case "turn_ended":
 		return "🟢", "Ready to review"
+	case "reviewed":
+		return "⚪", "Reviewed"
 	case "session_open":
 		return "🟣", "Open"
 	case "interrupted":

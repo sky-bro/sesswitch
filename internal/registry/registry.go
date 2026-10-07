@@ -28,6 +28,11 @@ type Store struct {
 	sessionDir  string
 }
 
+// WatchDirs are directories whose atomic record replacements affect snapshots.
+func (s *Store) WatchDirs() []string {
+	return []string{s.dir, s.activityDir, s.taskDir, s.sessionDir}
+}
+
 func New() (*Store, error) {
 	stateHome := os.Getenv("XDG_STATE_HOME")
 	if stateHome == "" {
@@ -76,6 +81,16 @@ func (s *Store) Put(id string, location session.Location) error {
 	path, err := s.path(id)
 	if err != nil {
 		return err
+	}
+	if existing, found, err := s.Get(id); err != nil {
+		return err
+	} else if found {
+		before, after := existing, location
+		before.LastSeen, after.LastSeen = time.Time{}, time.Time{}
+		before.NeedsAttention, after.NeedsAttention = false, false
+		if before == after {
+			return nil
+		}
 	}
 	location.LastSeen = time.Now().UTC()
 	data, err := json.Marshal(location)

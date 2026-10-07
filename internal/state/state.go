@@ -12,8 +12,31 @@ import (
 
 type Verifier func(context.Context, int, string, string) (process.Info, bool, error)
 
+// Observed projects hook events without claiming a fresh process inspection.
+// It is used by the event stream; live host checks happen on explicit snapshots.
+func Observed(item session.Session) session.State {
+	if item.Activity != nil {
+		observed := item.Activity.ObservedAt
+		return ApplyMarks(item, session.State{Kind: item.Activity.Kind, Source: item.Activity.Source, ObservedAt: &observed})
+	}
+	return ApplyMarks(item, item.State)
+}
+
+func ApplyMarks(item session.Session, resolved session.State) session.State {
+	if item.Task != nil && item.Task.Kind == "read" && item.Task.ReadThrough != nil &&
+		resolved.Kind == "turn_ended" && resolved.ObservedAt != nil &&
+		!resolved.ObservedAt.After(*item.Task.ReadThrough) {
+		resolved.Kind = "reviewed"
+	}
+	return resolved
+}
+
 func Resolve(ctx context.Context, item session.Session) session.State {
 	return resolve(ctx, item, process.SameIdentityFor)
+}
+
+func ResolveWithVerifier(ctx context.Context, item session.Session, verify Verifier) session.State {
+	return resolve(ctx, item, verify)
 }
 
 // ResolveDiscovered is only for a location verified in the current discovery
@@ -41,6 +64,27 @@ func resolve(ctx context.Context, item session.Session, verify Verifier) session
 		return session.State{Kind: "working", Source: "codex-app-server"}
 	}
 	if activity := item.Activity; activity != nil {
+		// A completed turn only needs review while its terminal agent is live.
+		// GUI events can lack a CLI identity and retain their event semantics.
+		if activity.Kind == "turn_ended" {
+			pid, start, provider := activity.AgentPID, activity.AgentStart, activity.Provider
+			if (pid <= 0 || start == "") && item.Location != nil {
+				pid, start, provider = item.Location.AgentPID, item.Location.AgentStart, item.Location.Provider
+			}
+			if provider == "" {
+				provider = item.Provider
+			}
+			if pid > 0 && start != "" {
+				_, same, err := verify(ctx, pid, start, provider)
+				if err != nil {
+					return session.State{Kind: "saved", Source: "process-unverified"}
+				}
+				if !same {
+					observed := time.Now().UTC()
+					return session.State{Kind: "closed", Source: "process-exited", ObservedAt: &observed}
+				}
+			}
+		}
 		usable := true
 		if activity.Kind == "needs_approval" || activity.Kind == "working" || activity.Kind == "session_open" {
 			usable = activity.AgentPID > 0 && activity.AgentStart != ""
@@ -72,6 +116,8 @@ func Label(state session.State) string {
 		return "working"
 	case "turn_ended":
 		return "turn ended · review"
+	case "reviewed":
+		return "reviewed"
 	case "session_open":
 		return "session open"
 	case "interrupted":

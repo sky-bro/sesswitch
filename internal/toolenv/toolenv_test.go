@@ -3,11 +3,50 @@ package toolenv
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestTmuxFormatOutputWithoutUTF8Locale(t *testing.T) {
+	tmux, err := exec.LookPath("tmux")
+	if err != nil {
+		t.Skip("tmux is not installed")
+	}
+	// Use a private server so the regression check never touches user sessions.
+	dir, err := os.MkdirTemp("", "ss-tmux-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "tmux.sock")
+	environment := []string{"HOME=" + dir, "PATH=/usr/bin:/bin", "LANG=C", "LC_ALL=C"}
+	start := exec.Command(tmux, "-S", socket, "-f", os.DevNull, "new-session", "-d", "-s", "gui", "/bin/sleep", "60")
+	start.Env = environment
+	if data, err := start.CombinedOutput(); err != nil {
+		t.Fatalf("start private tmux server: %v: %s", err, data)
+	}
+	t.Cleanup(func() {
+		stop := exec.Command(tmux, "-S", socket, "kill-server")
+		stop.Env = environment
+		_ = stop.Run()
+	})
+	resolver := newResolver(environment, dir, nil, config{Tools: map[string]string{"tmux": tmux}})
+	cmd, err := resolver.Command(context.Background(), "tmux", "-S", socket, "display-message", "-p", "-t", "gui:0.0", "#{session_name}\t#{pane_tty}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := strings.SplitN(strings.TrimSpace(string(data)), "\t", 2)
+	if len(parts) != 2 || parts[0] != "gui" || !strings.HasPrefix(parts[1], "/dev/") {
+		t.Fatalf("tmux mangled format fields without a UTF-8 locale: %q", data)
+	}
+}
 
 func writeTool(t *testing.T, dir, name, contents string) string {
 	t.Helper()

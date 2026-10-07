@@ -14,7 +14,7 @@ import {
   showToast,
   useNavigation,
 } from "@vicinae/api";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -91,6 +91,8 @@ function statusFor(session: Session): Status {
       return { label: "Working", color: Color.Blue };
     case "turn_ended":
       return { label: "Ready to review", color: Color.Green };
+    case "reviewed":
+      return { label: "Reviewed", color: Color.SecondaryText };
     case "session_open":
       return { label: "Open", color: Color.Purple };
     case "interrupted":
@@ -107,7 +109,12 @@ function statusFor(session: Session): Status {
 }
 
 function providerIcon(provider: string) {
-  if (provider === "codex") return join(environment.assetsPath, "codex.svg");
+  if (provider === "codex") return {
+    source: {
+      light: join(environment.assetsPath, "codex-light.png"),
+      dark: join(environment.assetsPath, "codex-dark.png"),
+    },
+  };
   if (provider === "claude") return join(environment.assetsPath, "claude.svg");
   return Icon.Terminal;
 }
@@ -189,12 +196,12 @@ function organizeSessions(sessions: Session[], organization: Organization): Sess
     {
       key: "needs-you",
       title: "Needs You",
-      matches: (session) => ["needs_approval", "error", "interrupted", "turn_ended"].includes(session.state.kind),
+      matches: (session) => session.task?.kind !== "done" && ["needs_approval", "error", "interrupted", "turn_ended"].includes(session.state.kind),
     },
     {
       key: "active",
       title: "Active",
-      matches: (session) => ["working", "session_open", "idle"].includes(session.state.kind),
+      matches: (session) => session.task?.kind !== "done" && ["working", "session_open", "idle"].includes(session.state.kind),
     },
     {
       key: "recent",
@@ -254,14 +261,6 @@ function applicationIcon(path: string, fallback: Icon) {
   return process.platform === "darwin" && existsSync(path) ? { fileIcon: path } : fallback;
 }
 
-async function loadSessions(): Promise<Session[]> {
-  const { stdout } = await execFileAsync(sesswitch, ["list", "--json"], {
-    timeout: 20_000,
-    maxBuffer: 8 * 1024 * 1024,
-  });
-  return JSON.parse(stdout) as Session[];
-}
-
 async function openSession(session: Session) {
   const toast = await showToast({
     title: `Opening ${session.title}`,
@@ -277,13 +276,12 @@ async function openSession(session: Session) {
   }
 }
 
-async function markSession(session: Session, mark: "done" | "clear", reload: () => Promise<void>) {
-  const title = mark === "done" ? "Marking task done" : "Clearing task mark";
+async function markSession(session: Session, mark: "read" | "done" | "clear") {
+  const title = mark === "read" ? "Marking turn read" : mark === "done" ? "Marking task done" : "Clearing task mark";
   const toast = await showToast({ title, style: Toast.Style.Animated });
   try {
     await execFileAsync(sesswitch, ["mark", mark, session.key], { timeout: 20_000 });
-    await reload();
-    toast.title = mark === "done" ? "Task marked done" : "Task mark cleared";
+    toast.title = mark === "read" ? "Turn marked read" : mark === "done" ? "Task marked done" : "Task mark cleared";
     toast.style = Toast.Style.Success;
   } catch (error) {
     toast.title = "Could not update task mark";
@@ -336,39 +334,68 @@ export default function AISessions() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string>();
   const [organization, setOrganization] = useState<Organization>("focus");
+  const [revision, setRevision] = useState(0);
+  const [warning, setWarning] = useState<string>();
 
+  // Refresh is explicit: restart the subscription and obtain a fresh catalog.
   const reload = useCallback(async () => {
     setIsLoading(true);
-    setError(undefined);
-    try {
-      const loaded = await loadSessions();
-      setSessions(loaded);
-      await LocalStorage.setItem(sessionsCacheStorageKey, JSON.stringify(loaded)).catch(() => undefined);
-    } catch (cause) {
-      const message = cause instanceof Error ? cause.message : String(cause);
-      setError(message);
-      await showToast({ title: "Could not load AI sessions", message, style: Toast.Style.Failure });
-    } finally {
-      setIsLoading(false);
-    }
+    setRevision((value) => value + 1);
   }, []);
 
   useEffect(() => {
     let cancelled = false;
-    void LocalStorage.getItem<string>(sessionsCacheStorageKey)
-      .then((cached) => {
-        if (!cached || cancelled) return;
-        const parsed = JSON.parse(cached) as Session[];
-        if (Array.isArray(parsed) && parsed.every(isCachedSession)) setSessions(parsed);
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        if (!cancelled) void reload();
-      });
+    let received = false;
+    let buffer = "";
+    let diagnostics = "";
+    const child = spawn(sesswitch, ["watch"], { stdio: ["ignore", "pipe", "pipe"] });
+    const fail = (message: string) => {
+      if (cancelled) return;
+      setIsLoading(false);
+      setError(message);
+      void showToast({ title: "Session updates stopped", message, style: Toast.Style.Failure });
+    };
+    setError(undefined);
+    void LocalStorage.getItem<string>(sessionsCacheStorageKey).then((cached) => {
+      if (!cached || cancelled || received) return;
+      const parsed = JSON.parse(cached) as Session[];
+      if (Array.isArray(parsed) && parsed.every(isCachedSession)) setSessions(parsed);
+    }).catch(() => undefined);
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      if (cancelled) return;
+      buffer += chunk;
+      let newline: number;
+      while ((newline = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, newline);
+        buffer = buffer.slice(newline + 1);
+        try {
+          const snapshot = JSON.parse(line) as { sessions: Session[]; warnings?: string[] };
+          if (!Array.isArray(snapshot.sessions) || !snapshot.sessions.every(isCachedSession)) {
+            throw new Error("Invalid session snapshot");
+          }
+          received = true;
+          setSessions(snapshot.sessions);
+          setWarning(snapshot.warnings?.join("; "));
+          setError(undefined);
+          setIsLoading(false);
+          void LocalStorage.setItem(sessionsCacheStorageKey, JSON.stringify(snapshot.sessions)).catch(() => undefined);
+        } catch (cause) {
+          fail(cause instanceof Error ? cause.message : String(cause));
+          child.kill();
+          return;
+        }
+      }
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => { diagnostics = (diagnostics + chunk).slice(-4096); });
+    child.on("error", (cause) => fail(cause.message));
+    child.on("close", () => fail(diagnostics.trim() || "Refresh Sessions to reconnect."));
     return () => {
       cancelled = true;
+      child.kill();
     };
-  }, [reload]);
+  }, [revision]);
 
   useEffect(() => {
     void LocalStorage.getItem<string>(organizationStorageKey).then((stored) => {
@@ -410,7 +437,12 @@ export default function AISessions() {
         </List.Dropdown>
       }
     >
-      {error ? (
+      {(warning || error) && (sessions.length > 0 || !!warning) ? (
+        <List.Section title={error ? "Updates stopped — refresh to reconnect" : "Some providers are unavailable"}>
+          <List.Item id="session-warning" title={error || warning || ""} icon={Icon.Warning} actions={<ActionPanel><Action title="Refresh Sessions" icon={Icon.ArrowClockwise} onAction={() => reload()} /></ActionPanel>} />
+        </List.Section>
+      ) : null}
+      {error && sessions.length === 0 ? (
         <List.EmptyView title="Could not load sessions" description={error} icon={Icon.Warning} />
       ) : sessions.length === 0 && !isLoading ? (
         <List.EmptyView title="No AI sessions found" icon={Icon.MagnifyingGlass} />
@@ -446,19 +478,27 @@ export default function AISessions() {
                           target={<RenameSessionForm session={session} reload={reload} />}
                         />
                       ) : null}
+                      {session.state.kind === "turn_ended" ? (
+                        <Action
+                          title="Mark Turn Read"
+                          icon={Icon.Checkmark}
+                          shortcut={{ modifiers: ["cmd", "shift"], key: "r" }}
+                          onAction={() => markSession(session, "read")}
+                        />
+                      ) : null}
                       {session.task?.kind === "done" ? (
                         <Action
                           title="Clear Done Mark"
                           icon={Icon.Circle}
                           shortcut={{ modifiers: ["cmd", "shift"], key: "d" }}
-                          onAction={() => markSession(session, "clear", reload)}
+                          onAction={() => markSession(session, "clear")}
                         />
                       ) : (
                         <Action
                           title="Mark Task Done"
                           icon={Icon.CheckCircle}
                           shortcut={{ modifiers: ["cmd", "shift"], key: "d" }}
-                          onAction={() => markSession(session, "done", reload)}
+                          onAction={() => markSession(session, "done")}
                         />
                       )}
                     </ActionPanel.Section>
@@ -473,7 +513,7 @@ export default function AISessions() {
                         title="Refresh Sessions"
                         icon={Icon.ArrowClockwise}
                         shortcut={Keyboard.Shortcut.Common.Refresh}
-                        onAction={reload}
+                        onAction={() => reload()}
                       />
                       <Action.CopyToClipboard
                         title="Copy Session Key"

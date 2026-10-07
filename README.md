@@ -88,6 +88,7 @@ Inside the list:
 - Return opens the selected session and closes the launcher.
 - `⌘B` opens session actions (chosen to avoid Vicinae's `⌘J/K` navigation).
 - `⌘E` renames a Codex session.
+- `⌘⇧R` marks the current completed turn as read.
 - `⌘⇧D` marks or unmarks your task as done.
 - `⌘P` opens the organization picker; `⌘⇧O` cycles Focus, Recent, Project,
   and Agent.
@@ -95,15 +96,21 @@ Inside the list:
 The default **Focus** view puts approval requests, failures, interruptions, and
 review-ready turns in **Needs You**, followed by active, recent, and explicitly
 completed work.
+The open list subscribes to local hook and mark events through `sesswitch watch`.
+It obtains a fresh catalog when opened or manually refreshed; there is no timer
+that polls providers or host state. Completed turns marked read move out of
+Needs You; a later completed turn becomes review-ready again. New agent activity
+reopens work previously marked Done.
 
 ## CLI
 
 ```text
 sesswitch list [--json]
+sesswitch watch [--limit N]
 sesswitch pick
 sesswitch open [--target auto|terminal|app] <provider:id>
 sesswitch rename <provider:id> <name>
-sesswitch mark done|clear <provider:id>
+sesswitch mark read|done|clear <provider:id>
 sesswitch hook codex|claude
 sesswitch doctor
 sesswitch version
@@ -118,7 +125,13 @@ sesswitch open --target app codex:<thread-id>
 sesswitch rename codex:<thread-id> "Investigate notification delivery"
 ```
 
-`list --json` is the integration boundary for other launchers. During the 0.x
+`list --json` returns a one-shot array. `watch` emits newline-delimited JSON
+snapshots containing `sessions`, optional `warnings`, and `catalog_at`. Each
+provider is queried independently; an unavailable provider retains cached
+metadata and produces an explicit warning. The history limit does not exclude
+hook-observed sessions.
+
+These commands are the integration boundary for other launchers. During the 0.x
 series its schema may gain fields; consumers should ignore unknown fields.
 
 ## How routing works
@@ -136,6 +149,10 @@ unrelated pane. It can conservatively recover a missing Codex coordinate from a
 unique match of project, pane title, and live provider process. A detached tmux
 session is attached; a duplicate agent process is not started merely because
 pane activation failed.
+
+Title matching excludes the project and path suffixes. If multiple sessions
+claim one pane, only a unique conversation-title match keeps the live binding;
+ambiguous claims cannot focus that pane. Historical sessions remain in the catalog.
 
 On macOS, Chrome side-panel sessions focus the originating tab by its recorded
 ID, with an exact URL fallback only when one live tab matches. If the tab cannot
@@ -186,13 +203,43 @@ and the same PATH and tool/provider configuration locations explicitly, so they
 do not depend on the GUI's original environment.
 Vicinae needs only the Sesswitch binary path.
 
+## Update architecture
+
+```text
+Provider hooks → private local records → filesystem events
+                                           ↓
+                                    sesswitch watch
+                                           ↓
+                                    launcher snapshot
+```
+
+The subscription lives only as long as the launcher view. It watches directories
+because records are replaced atomically, coalesces write bursts for 50 ms, and
+projects local state without querying providers, probing processes, or writing
+records back. Catalog queries and one shared process snapshot run only on open
+or explicit refresh. Focus always revalidates the target immediately.
+
+Hook writers capture arrival time before process inspection and serialize
+activity updates. Delayed older writes and late tool events for a completed
+turn cannot overwrite newer state. This orders observed hook arrivals; it does
+not invent a provider event sequence when the provider supplies none.
+
+Real-time updates require installed, loaded, trusted hooks that emit the relevant
+events. Hosts without such events provide snapshot-only state: changes appear
+on the next open or manual refresh. Closing a browser tab or forcibly killing an
+agent may not emit SessionEnd. Those lifecycle changes are not detected while
+the list remains open. A failed subscription is shown explicitly and requires
+manual refresh; there is no periodic reconciliation or automatic retry service.
+
 ## Status semantics
 
 `needs approval`, `working`, `turn ended · review`, `interrupted`, and
 `session closed` are runtime observations, not guesses about task completion.
 A `Stop` event means the current turn ended; it does not mean the user's task
 is complete. A live tmux title containing `Action Required` overrides an older
-turn-ended event. `mark done` is a separate, explicit user judgment.
+turn-ended event. `mark read` acknowledges the observed completed turn without
+finishing the task. `mark done` is a separate, explicit user judgment; newer
+agent activity makes that mark inactive, while SessionEnd alone does not.
 
 A tmux session verified during the current listing is shown as `session open`
 when no stronger runtime signal exists. This confirms that its process is live;

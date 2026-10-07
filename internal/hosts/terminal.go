@@ -28,7 +28,7 @@ func Focus(ctx context.Context, location session.Location, run Runner, output Ou
 		}
 	}
 	if location.TmuxPane != "" {
-		paneData, err := output(ctx, "tmux", "display-message", "-p", "-t", location.TmuxPane, "#{session_name}\t#{pane_tty}")
+		paneData, err := output(ctx, "tmux", "display-message", "-p", "-t", location.TmuxPane, "#{session_id}\t#{pane_tty}")
 		if err != nil {
 			return fmt.Errorf("locate tmux pane %s: %w", location.TmuxPane, err)
 		}
@@ -36,7 +36,7 @@ func Focus(ctx context.Context, location session.Location, run Runner, output Ou
 		if len(parts) != 2 || parts[0] == "" || process.NormalizeTTY(parts[1]) == "" {
 			return fmt.Errorf("tmux pane %s has no usable session/TTY", location.TmuxPane)
 		}
-		sessionName, paneTTY := parts[0], process.NormalizeTTY(parts[1])
+		sessionID, paneTTY := parts[0], process.NormalizeTTY(parts[1])
 		if err := verify(ctx, location, paneTTY); err != nil {
 			return err
 		}
@@ -63,7 +63,7 @@ func Focus(ctx context.Context, location session.Location, run Runner, output Ou
 			return err
 		}
 		if pane, ok := activeWezTermPane(panes); ok {
-			spawned, err := output(ctx, "wezterm", "cli", "spawn", "--window-id", strconv.FormatUint(pane.WindowID, 10), "--", "tmux", "attach-session", "-t", sessionName)
+			spawned, err := output(ctx, "wezterm", "cli", "spawn", "--window-id", strconv.FormatUint(pane.WindowID, 10), "--", "tmux", "attach-session", "-t", sessionID)
 			if err != nil {
 				return err
 			}
@@ -73,7 +73,7 @@ func Focus(ctx context.Context, location session.Location, run Runner, output Ou
 			}
 			return ActivateWezTermPane(ctx, paneID, run)
 		}
-		return run(ctx, "wezterm", "start", "--", "tmux", "attach-session", "-t", sessionName)
+		return run(ctx, "wezterm", "start", "--", "tmux", "attach-session", "-t", sessionID)
 	}
 	if location.WezTermPane != "" {
 		id, err := strconv.ParseUint(location.WezTermPane, 10, 64)

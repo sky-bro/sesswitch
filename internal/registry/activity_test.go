@@ -4,9 +4,53 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/sky-bro/sesswitch/internal/session"
 )
+
+func TestDelayedHookCannotOverwriteNewerActivity(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	store, _ := New()
+	now := time.Now().UTC()
+	newer := session.Activity{Kind: "needs_approval", ObservedAt: now}
+	older := session.Activity{Kind: "working", ObservedAt: now.Add(-time.Second)}
+	if err := store.PutActivity("thread", newer); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutActivity("thread", older); err != nil {
+		t.Fatal(err)
+	}
+	items, _ := store.Activities()
+	if items["thread"].Kind != "needs_approval" {
+		t.Fatal("older hook overwrote approval")
+	}
+}
+
+func TestCompletedTurnRejectsLateToolEventButAcceptsNewTurn(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	store, _ := New()
+	now := time.Now().UTC()
+	for _, activity := range []session.Activity{
+		{Kind: "turn_ended", TurnID: "first", ObservedAt: now},
+		{Kind: "working", TurnID: "first", Source: "codex-hook:PostToolUse", ObservedAt: now.Add(time.Second)},
+	} {
+		if err := store.PutActivity("thread", activity); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items, _ := store.Activities()
+	if items["thread"].Kind != "turn_ended" {
+		t.Fatal("completed turn regressed")
+	}
+	if err := store.PutActivity("thread", session.Activity{Kind: "working", TurnID: "second", ObservedAt: now.Add(2 * time.Second)}); err != nil {
+		t.Fatal(err)
+	}
+	items, _ = store.Activities()
+	if items["thread"].TurnID != "second" {
+		t.Fatal("new turn rejected")
+	}
+}
 
 func TestActivityRoundTripPrivate(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
@@ -112,5 +156,35 @@ func TestProviderKeySeparatesEqualSessionIDs(t *testing.T) {
 	}
 	if codex == claude || codex != "codex--same-id" || claude != "claude--same-id" {
 		t.Fatalf("unexpected keys: %q %q", codex, claude)
+	}
+}
+
+func TestNewWorkPermanentlyReopensDoneTask(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	store, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutTask("thread", session.Task{Kind: "done"}); err != nil {
+		t.Fatal(err)
+	}
+	tasks, _ := store.Tasks()
+	marked := tasks["thread"].UpdatedAt
+	// A delayed event predating the mark cannot reopen it.
+	if err := store.PutActivity("thread", session.Activity{Kind: "working", ObservedAt: marked.Add(-time.Second)}); err != nil {
+		t.Fatal(err)
+	}
+	tasks, _ = store.Tasks()
+	if tasks["thread"].Kind != "done" {
+		t.Fatal("older work cleared newer mark")
+	}
+	for i, kind := range []string{"working", "closed"} {
+		if err := store.PutActivity("thread", session.Activity{Kind: kind, ObservedAt: marked.Add(time.Duration(i+1) * time.Second)}); err != nil {
+			t.Fatal(err)
+		}
+		tasks, _ = store.Tasks()
+		if _, found := tasks["thread"]; found {
+			t.Fatalf("Done mark remains after %s", kind)
+		}
 	}
 }

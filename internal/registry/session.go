@@ -1,11 +1,13 @@
 package registry
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/sky-bro/sesswitch/internal/session"
@@ -28,6 +30,9 @@ func (s *Store) PutSession(item session.Session) error {
 			if item.CWD == "" {
 				item.CWD = existing.CWD
 			}
+			if strings.HasSuffix(item.Source, " hook") && existing.Source != "" {
+				item.Source = existing.Source
+			}
 		}
 	}
 	if item.Title == "" {
@@ -37,7 +42,9 @@ func (s *Store) PutSession(item session.Session) error {
 		item.Title = item.Provider + " session"
 	}
 	item.Key = item.Provider + ":" + item.ID
-	item.SessionID = item.ID
+	if item.SessionID == "" {
+		item.SessionID = item.ID
+	}
 	item.Location = nil
 	item.Activity = nil
 	item.Task = nil
@@ -48,6 +55,9 @@ func (s *Store) PutSession(item session.Session) error {
 	data, err := json.Marshal(item)
 	if err != nil {
 		return err
+	}
+	if previous, err := os.ReadFile(path); err == nil && bytes.Equal(bytes.TrimSpace(previous), data) {
+		return nil
 	}
 	tmp, err := os.CreateTemp(s.sessionDir, ".session-*")
 	if err != nil {

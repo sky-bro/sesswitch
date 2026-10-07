@@ -240,3 +240,25 @@ func TestOpenKeyValidationBeforeLookup(t *testing.T) {
 		t.Fatal("accepted invalid target")
 	}
 }
+
+func TestRegisteredLocationCompetingLeaseFallsBack(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	store, err := registry.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	loc := session.Location{Provider: "codex", TmuxPane: "%0", TTY: "/dev/ttys001", AgentPID: 42, AgentStart: "start"}
+	for _, key := range []string{"codex--old", "codex--current"} {
+		if err := store.Put(key, loc); err != nil {
+			t.Fatal(err)
+		}
+	}
+	focus := func(context.Context, session.Location, hosts.Runner, hosts.OutputRunner, hosts.Verifier) error {
+		t.Fatal("competing lease was focused without discovery")
+		return nil
+	}
+	focused, err := focusRegisteredLocationWith(context.Background(), "codex", "old", focus)
+	if focused || err != nil {
+		t.Fatalf("focused=%v err=%v", focused, err)
+	}
+}

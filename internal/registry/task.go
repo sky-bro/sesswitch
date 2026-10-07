@@ -15,9 +15,14 @@ func (s *Store) PutTask(id string, task session.Task) error {
 	if !safeID.MatchString(id) {
 		return fmt.Errorf("invalid session id %q", id)
 	}
-	if task.Kind != "done" {
+	if task.Kind != "done" && task.Kind != "read" {
 		return fmt.Errorf("unsupported task state %q", task.Kind)
 	}
+	unlock, err := s.lockRecords()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	task.UpdatedAt = time.Now().UTC()
 	data, err := json.Marshal(task)
 	if err != nil {
@@ -46,7 +51,12 @@ func (s *Store) ClearTask(id string) error {
 	if !safeID.MatchString(id) {
 		return fmt.Errorf("invalid session id %q", id)
 	}
-	err := os.Remove(filepath.Join(s.taskDir, id+".json"))
+	unlock, err := s.lockRecords()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	err = os.Remove(filepath.Join(s.taskDir, id+".json"))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -72,7 +82,7 @@ func (s *Store) Tasks() (map[string]session.Task, error) {
 			continue
 		}
 		var task session.Task
-		if json.Unmarshal(data, &task) == nil && task.Kind == "done" {
+		if json.Unmarshal(data, &task) == nil && (task.Kind == "done" || task.Kind == "read") {
 			tasks[id] = task
 		}
 	}

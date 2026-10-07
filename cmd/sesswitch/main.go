@@ -18,7 +18,6 @@ import (
 	openagent "github.com/sky-bro/sesswitch/internal/open"
 	"github.com/sky-bro/sesswitch/internal/presentation"
 	"github.com/sky-bro/sesswitch/internal/process"
-	"github.com/sky-bro/sesswitch/internal/providers"
 	"github.com/sky-bro/sesswitch/internal/providers/claude"
 	"github.com/sky-bro/sesswitch/internal/providers/codex"
 	"github.com/sky-bro/sesswitch/internal/registry"
@@ -44,6 +43,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	switch args[0] {
 	case "list":
 		return listCommand(args[1:], stdout)
+	case "watch":
+		return watchCommand(args[1:], stdout)
 	case "open":
 		return openCommand(args[1:])
 	case "pick":
@@ -73,22 +74,20 @@ func usage(w io.Writer) {
 
 Commands:
   list [--json] [--limit N]       List indexed AI sessions
+  watch [--limit N]               Stream snapshots on local state changes
   open [--target auto|terminal|app] <provider:id>
                                   Focus or resume a session
   pick                            Select a session with Vicinae dmenu
   hook codex|claude               Consume a provider hook event from stdin
-  mark done|clear <provider:id>   Mark a task done or clear the mark
+  mark read|done|clear <provider:id>   Mark a task done or clear the mark
   rename <provider:id> <name>     Rename a session when its provider supports it
   doctor                          Check local integrations
   version                         Print the version`)
 }
 
 func sessions(ctx context.Context, limit int) ([]session.Session, error) {
-	items, err := providers.List(ctx, []providers.Adapter{codex.New(), claude.New()}, limit)
-	if err != nil {
-		return nil, err
-	}
-	return decorateSessions(ctx, items)
+	snapshot, err := loadSnapshot(ctx, limit)
+	return snapshot.Sessions, err
 }
 
 func decorateSessions(ctx context.Context, items []session.Session) ([]session.Session, error) {
@@ -108,67 +107,72 @@ func decorateSessions(ctx context.Context, items []session.Session) ([]session.S
 	if err != nil {
 		return nil, err
 	}
+	processes := process.Capture(ctx)
 	for index := range items {
-		registryID, keyErr := registry.Key(items[index].Provider, items[index].ID)
-		if keyErr != nil {
-			return nil, keyErr
+		item := &items[index]
+		if _, err := registry.Key(item.Provider, item.ID); err != nil {
+			return nil, err
 		}
-		location, ok := locations[registryID]
-		if !ok { // pre-provider namespace compatibility
-			location, ok = locations[items[index].ID]
+		if location, found := lookupRecord(locations, *item); found {
+			item.Location = &location
 		}
-		if !ok && items[index].SessionID != "" {
-			sessionRegistryID, _ := registry.Key(items[index].Provider, items[index].SessionID)
-			location, ok = locations[sessionRegistryID]
-			if !ok {
-				location, ok = locations[items[index].SessionID]
+		if activity, found := lookupRecord(activities, *item); found {
+			item.Activity = &activity
+		}
+		if task, found := lookupRecord(tasks, *item); found {
+			item.Task = &task
+			if task.Kind == "done" && item.Activity != nil && item.Activity.Kind != "closed" && item.Activity.ObservedAt.After(task.UpdatedAt) {
+				item.Task = nil
 			}
 		}
-		if ok {
-			items[index].Location = &location
-		}
-		activity, found := activities[registryID]
-		if !found {
-			activity, found = activities[items[index].ID]
-		}
-		if !found && items[index].SessionID != "" {
-			sessionRegistryID, _ := registry.Key(items[index].Provider, items[index].SessionID)
-			activity, found = activities[sessionRegistryID]
-			if !found {
-				activity, found = activities[items[index].SessionID]
-			}
-		}
-		if found {
-			items[index].Activity = &activity
-		}
-		task, found := tasks[registryID]
-		if !found {
-			task, found = tasks[items[index].ID]
-		}
-		if !found && items[index].SessionID != "" {
-			sessionRegistryID, _ := registry.Key(items[index].Provider, items[index].SessionID)
-			task, found = tasks[sessionRegistryID]
-			if !found {
-				task, found = tasks[items[index].SessionID]
-			}
-		}
-		if found {
-			items[index].Task = &task
-		}
-		items[index].State = state.Resolve(ctx, items[index])
+		items[index].State = state.ApplyMarks(items[index], state.ResolveWithVerifier(ctx, items[index], processes.Verify))
 	}
-	discovered := hosts.DiscoverTmuxLocations(ctx, items, openagent.CommandOutputRunner, process.AgentInfoAtTTY)
+	paneClaims := make(map[string]int)
+	for _, item := range items {
+		if item.Location != nil && item.Location.TmuxPane != "" {
+			paneClaims[item.Location.TmuxPane]++
+		}
+	}
+	discovered := hosts.DiscoverTmuxLocations(ctx, items, openagent.CommandOutputRunner, processes.AgentAtTTY)
+	verifiedPanes := make(map[string]bool)
+	for _, location := range discovered {
+		verifiedPanes[location.TmuxPane] = true
+	}
 	for index := range items {
+		item := &items[index]
+		if item.Location != nil && paneClaims[item.Location.TmuxPane] > 1 {
+			if _, found := discovered[item.Key]; !found {
+				if verifiedPanes[item.Location.TmuxPane] {
+					for _, id := range []string{item.ID, item.SessionID} {
+						if id == "" {
+							continue
+						}
+						key, _ := registry.Key(item.Provider, id)
+						if err := store.Delete(key); err != nil {
+							return nil, err
+						}
+						if err := store.Delete(id); err != nil {
+							return nil, err
+						}
+					}
+				}
+				item.Location = nil
+				item.State = state.ApplyMarks(*item, state.ResolveWithVerifier(ctx, *item, processes.Verify))
+			}
+		}
 		if location, ok := discovered[items[index].Key]; ok {
 			items[index].Location = &location
-			registryID, err := registry.Key(items[index].Provider, items[index].ID)
-			if err != nil {
+			key, _ := registry.Key(items[index].Provider, items[index].ID)
+			// Persist only a changed coordinate, so recovery remains usable by
+			// subsequent open commands without generating self-refresh loops.
+			if err := store.Put(key, location); err != nil {
 				return nil, err
 			}
-			if err := store.Put(registryID, location); err != nil {
-				return nil, fmt.Errorf("cache discovered location for %s: %w", items[index].Key, err)
+			items[index].State = state.ApplyMarks(items[index], state.ResolveWithVerifier(ctx, items[index], processes.Verify))
+			if items[index].State.Kind == "saved" {
+				observed := location.LastSeen
+				items[index].State = session.State{Kind: "session_open", Source: "tmux-process", ObservedAt: &observed}
 			}
-			items[index].State = state.ResolveDiscovered(ctx, items[index], location)
 		}
 	}
 	return items, nil
@@ -186,9 +190,13 @@ func listCommand(args []string, stdout io.Writer) error {
 	}
 	ctx, cancel := context.WithTimeout(toolenv.Context(context.Background()), 12*time.Second)
 	defer cancel()
-	items, err := sessions(ctx, *limit)
+	snapshot, err := loadSnapshot(ctx, *limit)
 	if err != nil {
 		return err
+	}
+	items := snapshot.Sessions
+	for _, warning := range snapshot.Warnings {
+		fmt.Fprintln(os.Stderr, "sesswitch:", warning)
 	}
 	if *jsonOutput {
 		encoder := json.NewEncoder(stdout)
@@ -276,6 +284,19 @@ func focusRegisteredLocationWith(ctx context.Context, provider, id string, focus
 	if !ok || location.Provider != provider || location.AgentPID <= 0 || location.AgentStart == "" || location.TTY == "" {
 		return false, nil
 	}
+	locations, err := store.List()
+	if err != nil {
+		return false, err
+	}
+	for key, other := range locations {
+		if key == registryID || key == id {
+			continue
+		}
+		if location.TmuxPane != "" && other.TmuxPane == location.TmuxPane {
+			// Fall through to full discovery to reconcile competing thread leases.
+			return false, nil
+		}
+	}
 	if err := focus(ctx, location, openagent.CommandRunner, openagent.CommandOutputRunner, hosts.VerifyProcess); err == nil {
 		return true, nil
 	} else if !errors.Is(err, openagent.ErrStaleLocation) {
@@ -310,7 +331,22 @@ func sessionByKey(ctx context.Context, provider, id string) (session.Session, er
 	if item.ID == "" {
 		return session.Session{}, fmt.Errorf("session %q was not found", provider+":"+id)
 	}
-	items, err := decorateSessions(ctx, []session.Session{item})
+	store, err := registry.New()
+	if err != nil {
+		return session.Session{}, err
+	}
+	catalog, err := localCatalog(store, 1000)
+	if err != nil {
+		return session.Session{}, err
+	}
+	// Include cached peers so opening one key cannot bypass competing leases.
+	peers := []session.Session{item}
+	for _, candidate := range catalog {
+		if candidate.Key != item.Key {
+			peers = append(peers, candidate)
+		}
+	}
+	items, err := decorateSessions(ctx, peers)
 	if err != nil {
 		return session.Session{}, err
 	}
@@ -358,7 +394,7 @@ func pickCommand(args []string) error {
 
 func markCommand(args []string) error {
 	if len(args) != 2 {
-		return errors.New("mark requires done|clear and one provider:id key")
+		return errors.New("mark requires read|done|clear and one provider:id key")
 	}
 	provider, id, ok := strings.Cut(args[1], ":")
 	if !ok || provider == "" || id == "" {
@@ -369,6 +405,23 @@ func markCommand(args []string) error {
 		return err
 	}
 	switch args[0] {
+	case "read":
+		key, err := registry.Key(provider, id)
+		if err != nil {
+			return err
+		}
+		activities, err := store.Activities()
+		if err != nil {
+			return err
+		}
+		activity, found := activities[key]
+		if !found {
+			activity, found = activities[id]
+		}
+		if !found || activity.Kind != "turn_ended" {
+			return errors.New("session has no completed turn to mark read")
+		}
+		return store.PutTask(key, session.Task{Kind: "read", Source: "user", ReadThrough: &activity.ObservedAt})
 	case "done":
 		registryID, err := registry.Key(provider, id)
 		if err != nil {
@@ -484,12 +537,13 @@ func providerHookCommand(provider string, stdin io.Reader) error {
 	if err != nil {
 		return err
 	}
+	observedAt := time.Now().UTC()
 	activityKind := hookActivityKind(input)
 	location := session.Location{
 		Provider:    provider,
 		WezTermPane: os.Getenv("WEZTERM_PANE"),
 	}
-	if provider == "claude" {
+	if provider == "claude" || provider == "codex" {
 		cwd := input.CWD
 		if input.NewCWD != "" {
 			cwd = input.NewCWD
@@ -499,7 +553,7 @@ func providerHookCommand(provider string, stdin io.Reader) error {
 		if input.HookEventName == "SessionEnd" {
 			status = "closed"
 		}
-		if err := store.PutSession(session.Session{Provider: provider, ID: input.SessionID, Title: title, CWD: cwd, UpdatedAt: time.Now().UTC(), Status: status, Source: "Claude hook"}); err != nil {
+		if err := store.PutSession(session.Session{Provider: provider, ID: input.SessionID, Title: title, CWD: cwd, UpdatedAt: time.Now().UTC(), Status: status, Source: provider + " hook"}); err != nil {
 			return err
 		}
 	}
@@ -507,7 +561,7 @@ func providerHookCommand(provider string, stdin io.Reader) error {
 	defer cancel()
 	agent, err := process.AgentAncestor(ctx, provider)
 	if activityKind != "" {
-		activity := session.Activity{Provider: provider, Kind: activityKind, Source: provider + "-hook:" + input.HookEventName, TurnID: input.TurnID}
+		activity := session.Activity{Provider: provider, Kind: activityKind, Source: provider + "-hook:" + input.HookEventName, TurnID: input.TurnID, ObservedAt: observedAt}
 		if err == nil {
 			activity.AgentPID = agent.PID
 			activity.AgentStart = agent.Start
