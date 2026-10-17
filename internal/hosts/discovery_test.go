@@ -132,8 +132,15 @@ func TestDiscoverTmuxProjectSuffixDoesNotClaimPane(t *testing.T) {
 					}
 				}
 				got := DiscoverTmuxLocations(context.Background(), items, output, agent)
-				if len(got) != 1 || got["codex:current"].TmuxPane != "%0" {
+				count := 1
+				if registered {
+					count = 2
+				}
+				if len(got) != count || got["codex:current"].TmuxPane != "%0" || got["codex:current"].DisplayState != "current" {
 					t.Fatalf("registered=%v: unexpected claims: %#v", registered, got)
+				}
+				if registered && (got["codex:old"].DisplayState != "background" || got["codex:old"].NeedsAttention) {
+					t.Fatalf("background membership lost or received current UI state: %#v", got)
 				}
 			}
 		})
@@ -153,5 +160,27 @@ func TestDiscoverTmuxRejectsCompetingThreadsWithSameTitle(t *testing.T) {
 	}
 	if got := DiscoverTmuxLocations(context.Background(), items, output, agent); len(got) != 0 {
 		t.Fatalf("competing threads must not share a pane: %#v", got)
+	}
+}
+
+func TestSharedCarrierWithoutUniqueDisplayPreservesMembership(t *testing.T) {
+	items := []session.Session{
+		{Key: "codex:a", Provider: "codex", Title: "Same", CWD: "/tmp/repo", Location: &session.Location{TmuxPane: "%0", AgentPID: 42, AgentStart: "start"}},
+		{Key: "codex:b", Provider: "codex", Title: "Same", CWD: "/tmp/repo", Location: &session.Location{TmuxPane: "%0", AgentPID: 42, AgentStart: "start"}},
+	}
+	output := func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("%0\t/dev/ttys001\t/tmp/repo\tAction Required | Same | repo\n"), nil
+	}
+	agent := func(_ context.Context, tty, _ string) (process.Info, bool, error) {
+		return process.Info{PID: 42, TTY: tty, Start: "start"}, true, nil
+	}
+	got := DiscoverTmuxLocations(context.Background(), items, output, agent)
+	if len(got) != 2 {
+		t.Fatalf("shared membership was discarded: %#v", got)
+	}
+	for _, loc := range got {
+		if loc.DisplayState != "unknown" || loc.NeedsAttention {
+			t.Fatalf("ambiguous thread acquired foreground state: %+v", loc)
+		}
 	}
 }

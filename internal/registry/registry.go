@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/sky-bro/sesswitch/internal/session"
@@ -81,6 +82,12 @@ func (s *Store) Put(id string, location session.Location) error {
 	path, err := s.path(id)
 	if err != nil {
 		return err
+	}
+	if location.Provider != "" && location.AgentPID > 0 && location.AgentStart != "" && location.TTY != "" {
+		sessionID := strings.TrimPrefix(id, location.Provider+"--")
+		if err := s.RememberHost(location.Provider, sessionID, location.Kind); err != nil {
+			return err
+		}
 	}
 	if existing, found, err := s.Get(id); err != nil {
 		return err

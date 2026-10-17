@@ -22,6 +22,8 @@ type rpcMessage struct {
 	Error  *rpcError       `json:"error,omitempty"`
 }
 
+var ErrNoSavedData = errors.New("Codex session has no saved data")
+
 type rpcError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
@@ -171,6 +173,9 @@ func Read(ctx context.Context, threadID string) (session.Session, error) {
 			}
 		case 2:
 			if message.Error != nil {
+				if message.Error.Message == "thread not loaded: "+threadID || message.Error.Message == "no rollout found for thread id "+threadID {
+					return session.Session{}, fmt.Errorf("%w: %s; it may be a temporary /side conversation; use the original CLI to switch back if it is still available", ErrNoSavedData, threadID)
+				}
 				return session.Session{}, fmt.Errorf("read Codex thread: %s", message.Error.Message)
 			}
 			var result threadRead

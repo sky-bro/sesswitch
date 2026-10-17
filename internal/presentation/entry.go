@@ -69,6 +69,8 @@ func statePresentation(item session.Session) (string, string) {
 		return "✅", "Done"
 	}
 	switch item.State.Kind {
+	case "needs_input":
+		return "🟠", "Needs input"
 	case "needs_approval":
 		return "🟠", "Action needed"
 	case "working":
@@ -124,6 +126,12 @@ func destination(item session.Session) string {
 		default:
 			return item.Location.Kind
 		}
+	}
+	if item.Host == "tmux" {
+		return "tmux"
+	}
+	if item.Host == "wezterm" {
+		return "WezTerm"
 	}
 	source := strings.ToLower(item.Source)
 	switch {

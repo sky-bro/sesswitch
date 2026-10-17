@@ -13,6 +13,42 @@ import (
 	"github.com/sky-bro/sesswitch/internal/session"
 )
 
+func TestLocalProjectionHidesNonResumableHistoryButSurfacesRequests(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	store, err := registry.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := session.Session{Provider: "codex", ID: "side", Source: "codex hook", Resume: "unavailable"}
+	if err := store.PutSession(item); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put("codex--side", session.Location{Kind: "tmux", TmuxPane: "%1"}); err != nil {
+		t.Fatal(err)
+	}
+	previous := snapshot{}
+	for _, kind := range []string{"turn_ended", "needs_input", "working", "needs_approval", "closed"} {
+		if err := store.PutActivity("codex--side", session.Activity{Provider: "codex", Kind: kind, Source: "hook"}); err != nil {
+			t.Fatal(err)
+		}
+		previous, err = projectLocal(store, 100, previous)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := 0
+		if kind == "needs_input" || kind == "needs_approval" {
+			want = 1
+		}
+		if len(previous.Sessions) != want {
+			t.Fatalf("%s: got %d sessions want %d", kind, len(previous.Sessions), want)
+		}
+	}
+	stored, err := store.Sessions("codex")
+	if err != nil || len(stored) != 1 {
+		t.Fatal("hidden record was deleted")
+	}
+}
+
 func TestWatchStreamsHookChangesWithoutRefreshingProvider(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	store, err := registry.New()

@@ -75,7 +75,7 @@ func usage(w io.Writer) {
 Commands:
   list [--json] [--limit N]       List indexed AI sessions
   watch [--limit N]               Stream snapshots on local state changes
-  open [--target auto|terminal|app] <provider:id>
+  open [--target auto|terminal|app|host] <provider:id>
                                   Focus or resume a session
   pick                            Select a session with Vicinae dmenu
   hook codex|claude               Consume a provider hook event from stdin
@@ -127,41 +127,11 @@ func decorateSessions(ctx context.Context, items []session.Session) ([]session.S
 		}
 		items[index].State = state.ApplyMarks(items[index], state.ResolveWithVerifier(ctx, items[index], processes.Verify))
 	}
-	paneClaims := make(map[string]int)
-	for _, item := range items {
-		if item.Location != nil && item.Location.TmuxPane != "" {
-			paneClaims[item.Location.TmuxPane]++
-		}
-	}
-	discovered := hosts.DiscoverTmuxLocations(ctx, items, openagent.CommandOutputRunner, processes.AgentAtTTY)
-	verifiedPanes := make(map[string]bool)
-	for _, location := range discovered {
-		verifiedPanes[location.TmuxPane] = true
-	}
+	discovered := hosts.DiscoverTmuxLocations(ctx, items, openagent.CommandOutputRunner, processes.AgentAtTTY, process.ResumedThreadMatches)
 	for index := range items {
-		item := &items[index]
-		if item.Location != nil && paneClaims[item.Location.TmuxPane] > 1 {
-			if _, found := discovered[item.Key]; !found {
-				if verifiedPanes[item.Location.TmuxPane] {
-					for _, id := range []string{item.ID, item.SessionID} {
-						if id == "" {
-							continue
-						}
-						key, _ := registry.Key(item.Provider, id)
-						if err := store.Delete(key); err != nil {
-							return nil, err
-						}
-						if err := store.Delete(id); err != nil {
-							return nil, err
-						}
-					}
-				}
-				item.Location = nil
-				item.State = state.ApplyMarks(*item, state.ResolveWithVerifier(ctx, *item, processes.Verify))
-			}
-		}
 		if location, ok := discovered[items[index].Key]; ok {
 			items[index].Location = &location
+			items[index].Host = location.Kind
 			key, _ := registry.Key(items[index].Provider, items[index].ID)
 			// Persist only a changed coordinate, so recovery remains usable by
 			// subsequent open commands without generating self-refresh loops.
@@ -169,7 +139,7 @@ func decorateSessions(ctx context.Context, items []session.Session) ([]session.S
 				return nil, err
 			}
 			items[index].State = state.ApplyMarks(items[index], state.ResolveWithVerifier(ctx, items[index], processes.Verify))
-			if items[index].State.Kind == "saved" {
+			if location.DisplayState == "current" && (items[index].State.Kind == "saved" || items[index].State.Kind == "closed") {
 				observed := location.LastSeen
 				items[index].State = session.State{Kind: "session_open", Source: "tmux-process", ObservedAt: &observed}
 			}
@@ -219,7 +189,7 @@ func listCommand(args []string, stdout io.Writer) error {
 
 func openCommand(args []string) error {
 	flags := flag.NewFlagSet("open", flag.ContinueOnError)
-	target := flags.String("target", "auto", "auto, terminal, or app")
+	target := flags.String("target", "auto", "auto, terminal, app, or host (focus carrier only)")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -230,7 +200,7 @@ func openCommand(args []string) error {
 }
 
 func openKey(key, target string) error {
-	if target != "auto" && target != "terminal" && target != "app" {
+	if target != "auto" && target != "terminal" && target != "app" && target != "host" {
 		return fmt.Errorf("unsupported target %q", target)
 	}
 	ctx, cancel := context.WithTimeout(toolenv.Context(context.Background()), 12*time.Second)
@@ -245,8 +215,37 @@ func openKey(key, target string) error {
 	if _, err := registry.Key(provider, id); err != nil {
 		return fmt.Errorf("unsupported session key %q", key)
 	}
+	if target == "host" {
+		store, err := registry.New()
+		if err != nil {
+			return err
+		}
+		items, err := localCatalog(store, 1000)
+		if err != nil {
+			return err
+		}
+		items, err = decorateSessions(ctx, items)
+		if err != nil {
+			return err
+		}
+		for _, item := range items {
+			if item.Key != key || item.Location == nil {
+				continue
+			}
+			location := *item.Location
+			location.DisplayState, location.ThreadTitle = "", ""
+			return hosts.Focus(ctx, location, openagent.CommandRunner, openagent.CommandOutputRunner, hosts.VerifyProcess)
+		}
+		return fmt.Errorf("original CLI is no longer available")
+	}
 	if target == "auto" {
-		focused, err := focusRegisteredLocation(ctx, provider, id)
+		var focused bool
+		var err error
+		if provider == "codex" {
+			focused, err = focusCachedTmuxLocation(ctx, provider, id)
+		} else {
+			focused, err = focusRegisteredLocation(ctx, provider, id)
+		}
 		if err != nil {
 			return err
 		}
@@ -259,6 +258,58 @@ func openKey(key, target string) error {
 		return err
 	}
 	return openagent.Session(ctx, item, target, openagent.CommandRunner)
+}
+
+// A provider-confirmed cached thread can be focused without starting another
+// app-server. Reconcile all cached peers first: a raw carrier lease is not proof
+// that this thread is still displayed. Hook-only/non-resumable threads still
+// require the provider read path or an explicit host-only action.
+func focusCachedTmuxLocation(ctx context.Context, provider, id string) (bool, error) {
+	store, err := registry.New()
+	if err != nil {
+		return false, err
+	}
+	var items []session.Session
+	for _, name := range []string{"codex", "claude"} {
+		part, err := store.Sessions(name)
+		if err != nil {
+			return false, err
+		}
+		items = append(items, part...)
+	}
+	return focusCachedTmuxLocationWith(ctx, provider+":"+id, items, decorateSessions, hosts.Focus)
+}
+
+func focusCachedTmuxLocationWith(ctx context.Context, key string, items []session.Session,
+	decorate func(context.Context, []session.Session) ([]session.Session, error),
+	focus func(context.Context, session.Location, hosts.Runner, hosts.OutputRunner, hosts.Verifier) error,
+) (bool, error) {
+	eligible := false
+	for _, item := range items {
+		if item.Key == key && item.Resume != "unavailable" && item.Source != "" && !strings.HasSuffix(item.Source, " hook") {
+			eligible = true
+			break
+		}
+	}
+	if !eligible {
+		return false, nil
+	}
+	items, err := decorate(ctx, items)
+	if err != nil {
+		return false, err
+	}
+	for _, item := range items {
+		loc := item.Location
+		if item.Key != key || loc == nil || loc.Provider != item.Provider || loc.TmuxPane == "" || loc.DisplayState != "current" || loc.AgentPID <= 0 || loc.AgentStart == "" || loc.TTY == "" {
+			continue
+		}
+		if err := focus(ctx, *loc, openagent.CommandRunner, openagent.CommandOutputRunner, hosts.VerifyProcess); err == nil {
+			return true, nil
+		} else if !errors.Is(err, hosts.ErrStaleLocation) && !errors.Is(err, hosts.ErrSessionNotDisplayed) {
+			return false, fmt.Errorf("could not focus registered location (not resuming automatically): %w", err)
+		}
+	}
+	return false, nil
 }
 
 func focusRegisteredLocation(ctx context.Context, provider, id string) (bool, error) {
@@ -299,7 +350,7 @@ func focusRegisteredLocationWith(ctx context.Context, provider, id string, focus
 	}
 	if err := focus(ctx, location, openagent.CommandRunner, openagent.CommandOutputRunner, hosts.VerifyProcess); err == nil {
 		return true, nil
-	} else if !errors.Is(err, openagent.ErrStaleLocation) {
+	} else if !errors.Is(err, openagent.ErrStaleLocation) && !errors.Is(err, hosts.ErrSessionNotDisplayed) {
 		return false, fmt.Errorf("could not focus registered location (not resuming automatically): %w", err)
 	}
 	return false, nil
@@ -311,6 +362,11 @@ func sessionByKey(ctx context.Context, provider, id string) (session.Session, er
 	switch provider {
 	case "codex":
 		item, err = codex.Read(ctx, id)
+		if errors.Is(err, codex.ErrNoSavedData) {
+			if store, storeErr := registry.New(); storeErr == nil {
+				_ = store.SetResume(provider, id, "unavailable")
+			}
+		}
 	case "claude":
 		var items []session.Session
 		items, err = claude.New().List(ctx, 1000)
@@ -342,7 +398,9 @@ func sessionByKey(ctx context.Context, provider, id string) (session.Session, er
 	// Include cached peers so opening one key cannot bypass competing leases.
 	peers := []session.Session{item}
 	for _, candidate := range catalog {
-		if candidate.Key != item.Key {
+		if candidate.Key == item.Key {
+			peers[0].Host = candidate.Host
+		} else {
 			peers = append(peers, candidate)
 		}
 	}

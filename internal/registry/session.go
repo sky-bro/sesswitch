@@ -16,6 +16,15 @@ import (
 // PutSession records only normalized metadata supplied by a documented
 // provider interface. It deliberately does not retain prompts or transcripts.
 func (s *Store) PutSession(item session.Session) error {
+	unlock, err := s.lockRecords()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return s.putSession(item)
+}
+
+func (s *Store) putSession(item session.Session) error {
 	key, err := Key(item.Provider, item.ID)
 	if err != nil {
 		return err
@@ -24,6 +33,12 @@ func (s *Store) PutSession(item session.Session) error {
 	if existingData, readErr := os.ReadFile(path); readErr == nil {
 		var existing session.Session
 		if json.Unmarshal(existingData, &existing) == nil {
+			if strings.HasSuffix(item.Source, " hook") && item.Resume == "" {
+				item.Resume = existing.Resume
+			}
+			if item.Host == "" {
+				item.Host = existing.Host
+			}
 			if item.Title == "" {
 				item.Title = existing.Title
 			}
@@ -78,6 +93,29 @@ func (s *Store) PutSession(item session.Session) error {
 	return os.Rename(tmp.Name(), path)
 }
 
+// SetResume records a provider-confirmed limitation without changing activity.
+func (s *Store) SetResume(provider, id, capability string) error {
+	key, err := Key(provider, id)
+	if err != nil {
+		return err
+	}
+	unlock, err := s.lockRecords()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	data, err := os.ReadFile(filepath.Join(s.sessionDir, key+".json"))
+	if err != nil {
+		return err
+	}
+	var item session.Session
+	if err := json.Unmarshal(data, &item); err != nil {
+		return err
+	}
+	item.Resume = capability
+	return s.putSession(item)
+}
+
 func (s *Store) Sessions(provider string) ([]session.Session, error) {
 	if !safeID.MatchString(provider) {
 		return nil, fmt.Errorf("invalid provider %q", provider)
@@ -104,4 +142,36 @@ func (s *Store) Sessions(provider string) ([]session.Session, error) {
 	}
 	sort.SliceStable(items, func(i, j int) bool { return items[i].UpdatedAt.After(items[j].UpdatedAt) })
 	return items, nil
+}
+
+// RememberHost stores provenance without retaining a stale pane or PID.
+func (s *Store) RememberHost(provider, id, host string) error {
+	key, err := Key(provider, id)
+	if err != nil {
+		return err
+	}
+	if host != "tmux" && host != "wezterm" {
+		return nil
+	}
+	unlock, err := s.lockRecords()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	data, err := os.ReadFile(filepath.Join(s.sessionDir, key+".json"))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var item session.Session
+	if json.Unmarshal(data, &item) != nil || item.Provider != provider || item.ID != id {
+		return nil
+	}
+	if item.Host == host {
+		return nil
+	}
+	item.Host = host
+	return s.putSession(item)
 }

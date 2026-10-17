@@ -10,6 +10,9 @@ type Location struct {
 	TTY         string `json:"tty,omitempty"`
 	AgentPID    int    `json:"agent_pid,omitempty"`
 	AgentStart  string `json:"agent_start,omitempty"`
+	// DisplayState separates a shared carrier from the currently visible thread.
+	DisplayState string `json:"display_state,omitempty"`
+	ThreadTitle  string `json:"thread_title,omitempty"`
 	// NeedsAttention is derived from the current host UI and must never be
 	// persisted as part of a reusable location lease.
 	NeedsAttention bool      `json:"-"`
@@ -42,16 +45,19 @@ type Task struct {
 }
 
 type Session struct {
-	Key          string    `json:"key"`
-	Provider     string    `json:"provider"`
-	ID           string    `json:"id"`
-	SessionID    string    `json:"session_id,omitempty"`
-	Title        string    `json:"title"`
-	CWD          string    `json:"cwd,omitempty"`
-	UpdatedAt    time.Time `json:"updated_at"`
-	Status       string    `json:"status"`
-	ActiveFlags  []string  `json:"active_flags,omitempty"`
-	Source       string    `json:"source,omitempty"`
+	Key         string    `json:"key"`
+	Provider    string    `json:"provider"`
+	ID          string    `json:"id"`
+	SessionID   string    `json:"session_id,omitempty"`
+	Title       string    `json:"title"`
+	CWD         string    `json:"cwd,omitempty"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	Status      string    `json:"status"`
+	ActiveFlags []string  `json:"active_flags,omitempty"`
+	Source      string    `json:"source,omitempty"`
+	// Host remembers a verified terminal independently of its live focus lease.
+	Host         string    `json:"host,omitempty"`
+	Resume       string    `json:"resume,omitempty"` // unavailable: provider confirmed no saved data
 	BrowserTabID string    `json:"-"`
 	BrowserURL   string    `json:"-"`
 	Location     *Location `json:"location,omitempty"`

@@ -50,3 +50,10 @@ func TestProviderIconsAreDistinct(t *testing.T) {
 		t.Fatalf("unexpected provider icons: codex=%q claude=%q", codex.ProviderIcon, claude.ProviderIcon)
 	}
 }
+
+func TestClosedSessionKeepsVerifiedHost(t *testing.T) {
+	got := New(session.Session{Provider: "codex", Source: "vscode", Host: "tmux", State: session.State{Kind: "closed"}})
+	if got.Destination != "tmux" || got.Status != "Closed" {
+		t.Fatalf("unexpected entry: %+v", got)
+	}
+}

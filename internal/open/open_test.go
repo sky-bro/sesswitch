@@ -3,8 +3,11 @@ package open
 import (
 	"context"
 	"errors"
+	"os/exec"
 	"reflect"
 	"runtime"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -355,5 +358,93 @@ func TestAutoFallsBackToChromeWhenRecordedTabIsUnavailable(t *testing.T) {
 	wantLast := []string{"open", "-b", "com.google.Chrome"}
 	if len(calls) != 2 || !reflect.DeepEqual(calls[1], wantLast) {
 		t.Fatalf("unexpected fallback calls: %q", calls)
+	}
+}
+
+func TestClosedTmuxSessionResumesInTerminalDespiteGenericSource(t *testing.T) {
+	var got []string
+	run := func(_ context.Context, name string, args ...string) error {
+		got = append([]string{name}, args...)
+		return nil
+	}
+	item := session.Session{Provider: "codex", ID: "abc", CWD: "/tmp/repo", Source: "vscode", Host: "tmux", State: session.State{Kind: "closed"}}
+	if err := Session(context.Background(), item, "auto", run); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"wezterm", "start", "--cwd", "/tmp/repo", "--", "codex", "resume", "abc"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestGUIStartSurvivesRequestCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/bin/sleep", "60")
+	if err := launchWezTerm(cmd); err != nil {
+		t.Fatal(err)
+	}
+	defer cmd.Process.Kill()
+	cancel()
+	// Give CommandContext's cancellation watcher time to act in a regression.
+	time.Sleep(100 * time.Millisecond)
+	if err := syscall.Kill(cmd.Process.Pid, 0); err != nil {
+		t.Fatalf("launcher's cancellation terminated GUI: %v", err)
+	}
+}
+
+func TestGUIStartReportsImmediateFailure(t *testing.T) {
+	cmd := exec.CommandContext(context.Background(), "/bin/sh", "-c", "printf 'startup failed' >&2; exit 7")
+	err := launchWezTerm(cmd)
+	if err == nil || !strings.Contains(err.Error(), "startup failed") {
+		t.Fatalf("startup failure was hidden: %v", err)
+	}
+}
+
+func TestGUIStartRejectsCancelledRequest(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cmd := exec.CommandContext(ctx, "/bin/sleep", "60")
+	if err := launchWezTerm(cmd); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled request started GUI: %v", err)
+	}
+}
+
+func TestBackgroundThreadResumesExactIDWithoutFocusingOtherThread(t *testing.T) {
+	var got []string
+	run := func(_ context.Context, name string, args ...string) error {
+		got = append([]string{name}, args...)
+		return nil
+	}
+	output := func(context.Context, string, ...string) ([]byte, error) {
+		t.Fatal("background thread must not manipulate the displayed pane")
+		return nil, nil
+	}
+	item := session.Session{Provider: "codex", ID: "background", Host: "tmux", Location: &session.Location{Kind: "tmux", TmuxPane: "%0", DisplayState: "background"}}
+	if err := sessionWithRunners(context.Background(), item, "auto", run, output, acceptLocation); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"wezterm", "start", "--", "codex", "resume", "background"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestThreadSwitchBetweenDiscoveryAndFocusResumesRequestedID(t *testing.T) {
+	var commands [][]string
+	run := func(_ context.Context, name string, args ...string) error {
+		commands = append(commands, append([]string{name}, args...))
+		return nil
+	}
+	output := func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("/tmp/repo\tOther thread | repo\n"), nil
+	}
+	item := session.Session{Provider: "codex", ID: "requested", Host: "tmux", Location: &session.Location{Kind: "tmux", TmuxPane: "%0", DisplayState: "current", ThreadTitle: "Requested thread"}}
+	if err := sessionWithRunners(context.Background(), item, "auto", run, output, acceptLocation); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{{"wezterm", "start", "--", "codex", "resume", "requested"}}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("focused a different thread: %q", commands)
 	}
 }

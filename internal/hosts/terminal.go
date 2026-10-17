@@ -17,17 +17,32 @@ type Runner func(context.Context, string, ...string) error
 type OutputRunner func(context.Context, string, ...string) ([]byte, error)
 type Verifier func(context.Context, session.Location, string) error
 
+var ErrSessionNotDisplayed = errors.New("the requested session is not currently displayed in its host")
+
 var ErrStaleLocation = errors.New("registered agent process is no longer running")
 
 // Focus routes a verified terminal location to its concrete host adapter.
 // tmux owns pane selection while WezTerm owns GUI-pane and app activation.
 func Focus(ctx context.Context, location session.Location, run Runner, output OutputRunner, verify Verifier) error {
+	if location.DisplayState != "" && location.DisplayState != "current" {
+		return ErrSessionNotDisplayed
+	}
 	if location.AgentPID > 0 && location.AgentStart != "" && location.TTY != "" {
 		if err := verify(ctx, location, process.NormalizeTTY(location.TTY)); err != nil {
 			return err
 		}
 	}
 	if location.TmuxPane != "" {
+		if location.ThreadTitle != "" {
+			data, err := output(ctx, "tmux", "display-message", "-p", "-t", location.TmuxPane, "#{pane_current_path}\t#{pane_title}")
+			if err != nil {
+				return err
+			}
+			parts := strings.SplitN(strings.TrimSpace(string(data)), "\t", 2)
+			if len(parts) != 2 || !paneTitleMatches(conversationTitle(tmuxPane{cwd: parts[0], title: parts[1]}), location.ThreadTitle) {
+				return ErrSessionNotDisplayed
+			}
+		}
 		paneData, err := output(ctx, "tmux", "display-message", "-p", "-t", location.TmuxPane, "#{session_id}\t#{pane_tty}")
 		if err != nil {
 			return fmt.Errorf("locate tmux pane %s: %w", location.TmuxPane, err)

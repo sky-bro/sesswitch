@@ -12,6 +12,10 @@ import (
 
 type AgentAtTTY func(context.Context, string, string) (process.Info, bool, error)
 
+// ThreadAtProcess independently checks an explicit thread identity on a live
+// CLI. Titles and a previously registered pane are not ownership evidence.
+type ThreadAtProcess func(context.Context, process.Info, string, string) bool
+
 type tmuxPane struct {
 	id    string
 	tty   string
@@ -22,9 +26,9 @@ type tmuxPane struct {
 // DiscoverTmuxLocations conservatively recovers locations missed by hooks and
 // refreshes registered tmux locations with live host state. A session is linked
 // only when exactly one pane has the same cwd and title and contains a live
-// provider CLI. A registered pane is refreshed by its pane and process identity
-// so provider-side renames cannot freeze stale title-derived state.
-func DiscoverTmuxLocations(ctx context.Context, items []session.Session, output OutputRunner, agentAtTTY AgentAtTTY) map[string]session.Location {
+// provider CLI. Registered threads retain shared carrier associations, while
+// title matching establishes which thread is currently displayed.
+func DiscoverTmuxLocations(ctx context.Context, items []session.Session, output OutputRunner, agentAtTTY AgentAtTTY, threadAtProcess ...ThreadAtProcess) map[string]session.Location {
 	result := make(map[string]session.Location)
 	data, err := output(ctx, "tmux", "list-panes", "-a", "-F", "#{pane_id}\t#{pane_tty}\t#{pane_current_path}\t#{pane_title}")
 	if err != nil {
@@ -55,12 +59,16 @@ func DiscoverTmuxLocations(ctx context.Context, items []session.Session, output 
 			}
 			if registered && item.Location.AgentPID > 0 && item.Location.AgentStart != "" &&
 				(info.PID != item.Location.AgentPID || info.Start != item.Location.AgentStart) {
-				continue
+				if len(threadAtProcess) != 1 || threadAtProcess[0] == nil ||
+					!uniqueResumedClaim(item, items, pane, info) ||
+					!threadAtProcess[0](ctx, info, item.Provider, item.ID) {
+					continue
+				}
 			}
 			location := session.Location{
 				Provider: item.Provider, Kind: "tmux", TmuxPane: pane.id,
 				TTY: info.TTY, AgentPID: info.PID, AgentStart: info.Start,
-				NeedsAttention: paneNeedsAttention(pane.title), LastSeen: time.Now().UTC(),
+				DisplayState: "background", ThreadTitle: item.Title, LastSeen: time.Now().UTC(),
 			}
 			if item.Location != nil {
 				location.WezTermPane = item.Location.WezTermPane
@@ -72,13 +80,10 @@ func DiscoverTmuxLocations(ctx context.Context, items []session.Session, output 
 			claims[matches[0].TmuxPane] = append(claims[matches[0].TmuxPane], item)
 		}
 	}
-	// A live process proves the pane is occupied, not which historical thread
-	// owns it. Resolve competing leases only with a unique conversation title.
+	// A live CLI can host several threads. Preserve verified carrier leases;
+	// only a unique conversation-title match identifies the displayed thread.
 	for _, pane := range panes {
 		owners := claims[pane.id]
-		if len(owners) < 2 {
-			continue
-		}
 		winner := ""
 		matches := 0
 		for _, owner := range owners {
@@ -88,12 +93,45 @@ func DiscoverTmuxLocations(ctx context.Context, items []session.Session, output 
 			}
 		}
 		for _, owner := range owners {
-			if matches != 1 || owner.Key != winner {
+			location := result[owner.Key]
+			if matches == 1 && owner.Key == winner {
+				location.DisplayState = "current"
+				location.NeedsAttention = paneNeedsAttention(pane.title)
+			} else if owner.Location == nil {
+				// Never invent membership from an ambiguous title.
 				delete(result, owner.Key)
+				continue
+			} else if matches != 1 {
+				location.DisplayState = "unknown"
 			}
+			result[owner.Key] = location
 		}
 	}
 	return result
+}
+
+func uniqueResumedClaim(item session.Session, items []session.Session, pane tmuxPane, info process.Info) bool {
+	if item.ID == "" || item.Title == "" || item.CWD == "" ||
+		!samePath(item.CWD, pane.cwd) || !paneTitleMatches(conversationTitle(pane), item.Title) {
+		return false
+	}
+	for _, peer := range items {
+		if peer.Key == item.Key || peer.Provider != item.Provider {
+			continue
+		}
+		// Include rejected historical claims too, rather than letting the
+		// process mismatch hide an otherwise ambiguous conversation title.
+		if peer.CWD != "" && samePath(peer.CWD, pane.cwd) && paneTitleMatches(conversationTitle(pane), peer.Title) {
+			return false
+		}
+		// argv describes the launch, not subsequent in-CLI thread switches.
+		// A competing lease on this new process takes precedence over argv.
+		if loc := peer.Location; loc != nil && loc.TmuxPane == pane.id &&
+			loc.AgentPID == info.PID && loc.AgentStart == info.Start {
+			return false
+		}
+	}
+	return true
 }
 
 // Codex appends the project name and optionally its path to the conversation.

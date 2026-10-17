@@ -124,7 +124,11 @@ func TestReadAppServerHelper(t *testing.T) {
 				os.Exit(3)
 			}
 			if os.Getenv("SESSWITCH_READ_FAIL") == "1" {
-				_ = encoder.Encode(map[string]any{"id": req.ID, "error": map[string]any{"code": -1, "message": "thread missing"}})
+				message := os.Getenv("SESSWITCH_READ_ERROR")
+				if message == "" {
+					message = "thread missing"
+				}
+				_ = encoder.Encode(map[string]any{"id": req.ID, "error": map[string]any{"code": -1, "message": message}})
 			} else {
 				_ = encoder.Encode(map[string]any{"id": req.ID, "result": map[string]any{"thread": map[string]any{"id": "thread-1", "name": "A thread", "source": "vscode", "originator": "codex-chrome-extension-sidepanel", "path": os.Getenv("SESSWITCH_READ_ROLLOUT")}}})
 			}
@@ -165,6 +169,12 @@ func TestReadUsesExactThreadAndBrowserContext(t *testing.T) {
 	t.Setenv("SESSWITCH_READ_FAIL", "1")
 	if _, err := Read(context.Background(), "thread-1"); err == nil || !strings.Contains(err.Error(), "thread missing") {
 		t.Fatalf("lost RPC error: %v", err)
+	}
+	for _, message := range []string{"thread not loaded: thread-1", "no rollout found for thread id thread-1"} {
+		t.Setenv("SESSWITCH_READ_ERROR", message)
+		if _, err := Read(context.Background(), "thread-1"); err == nil || !strings.Contains(err.Error(), "no saved data") {
+			t.Fatalf("missing actionable error: %v", err)
+		}
 	}
 }
 

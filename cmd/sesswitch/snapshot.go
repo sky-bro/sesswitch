@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -52,6 +53,23 @@ func loadWithAdapters(ctx context.Context, limit int, adapters []providers.Adapt
 		return result, err
 	}
 	result.Sessions, err = decorateSessions(ctx, items)
+	if err == nil {
+		for i := range result.Sessions {
+			item := &result.Sessions[i]
+			// Missing from a limited catalog is not evidence of a temporary thread.
+			// Verify only hook-only background associations through the exact read API.
+			if item.Provider != "codex" || item.Source != "codex hook" || item.Resume != "" || item.Location == nil || item.Location.DisplayState != "background" {
+				continue
+			}
+			if _, readErr := codex.Read(ctx, item.ID); errors.Is(readErr, codex.ErrNoSavedData) {
+				item.Resume = "unavailable"
+				if writeErr := store.SetResume(item.Provider, item.ID, item.Resume); writeErr != nil {
+					return result, writeErr
+				}
+			}
+		}
+	}
+	result.Sessions = session.VisibleSessions(result.Sessions)
 	return result, err
 }
 
@@ -140,7 +158,7 @@ func projectLocal(store *registry.Store, limit int, previous snapshot) (snapshot
 			item.Task = nil
 		}
 	}
-	previous.Sessions = items
+	previous.Sessions = session.VisibleSessions(items)
 	return previous, nil
 }
 

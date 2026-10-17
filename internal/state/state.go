@@ -55,8 +55,11 @@ func resolve(ctx context.Context, item session.Session, verify Verifier) session
 		if slices.Contains(item.ActiveFlags, "waitingOnApproval") {
 			return session.State{Kind: "needs_approval", Source: "codex-app-server"}
 		}
+		if slices.Contains(item.ActiveFlags, "waitingOnUserInput") {
+			return session.State{Kind: "needs_input", Source: "codex-app-server"}
+		}
 	}
-	if item.Location != nil && item.Location.NeedsAttention {
+	if item.Location != nil && item.Location.NeedsAttention && (item.Location.DisplayState == "" || item.Location.DisplayState == "current") {
 		observed := item.Location.LastSeen
 		return session.State{Kind: "needs_approval", Source: "tmux-title", ObservedAt: &observed}
 	}
@@ -86,7 +89,7 @@ func resolve(ctx context.Context, item session.Session, verify Verifier) session
 			}
 		}
 		usable := true
-		if activity.Kind == "needs_approval" || activity.Kind == "working" || activity.Kind == "session_open" {
+		if activity.Kind == "needs_approval" || activity.Kind == "needs_input" || activity.Kind == "working" || activity.Kind == "session_open" {
 			usable = activity.AgentPID > 0 && activity.AgentStart != ""
 			if usable {
 				_, same, err := verify(ctx, activity.AgentPID, activity.AgentStart, activity.Provider)
@@ -110,6 +113,8 @@ func resolve(ctx context.Context, item session.Session, verify Verifier) session
 
 func Label(state session.State) string {
 	switch state.Kind {
+	case "needs_input":
+		return "needs input"
 	case "needs_approval":
 		return "needs approval"
 	case "working":

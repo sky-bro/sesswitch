@@ -147,3 +147,21 @@ func TestFreshDiscoveryOnlyPromotesSaved(t *testing.T) {
 		t.Fatalf("persisted location promoted: %+v", got)
 	}
 }
+
+func TestWaitingOnUserInputNeedsAttention(t *testing.T) {
+	item := session.Session{Status: "active", ActiveFlags: []string{"waitingOnUserInput"}}
+	if got := resolve(context.Background(), item, nil); got.Kind != "needs_input" {
+		t.Fatalf("got %+v", got)
+	}
+	item.ActiveFlags = append(item.ActiveFlags, "waitingOnApproval")
+	if got := resolve(context.Background(), item, nil); got.Kind != "needs_approval" {
+		t.Fatalf("approval should take precedence: %+v", got)
+	}
+}
+
+func TestBackgroundThreadDoesNotInheritPaneApproval(t *testing.T) {
+	item := session.Session{Status: "notLoaded", Location: &session.Location{DisplayState: "background", NeedsAttention: true}}
+	if got := resolve(context.Background(), item, nil); got.Kind == "needs_approval" {
+		t.Fatalf("background thread inherited foreground state: %+v", got)
+	}
+}

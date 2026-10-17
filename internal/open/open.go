@@ -4,9 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"runtime"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/sky-bro/sesswitch/internal/hosts"
 	"github.com/sky-bro/sesswitch/internal/session"
@@ -25,7 +29,49 @@ func CommandRunner(ctx context.Context, name string, args ...string) error {
 		return err
 	}
 	cmd.Env = commandEnvironment(name, cmd.Env, wezTermSocketExists)
+	if name == "wezterm" && len(args) > 0 && args[0] == "start" {
+		return launchWezTerm(cmd)
+	}
 	return cmd.Run()
+}
+
+// A new GUI can outlive the launcher request. Keep it out of the request's
+// process group, cancellation watcher and stdout/stderr pipes.
+func launchWezTerm(cmd *exec.Cmd) error {
+	log, err := os.CreateTemp("", "sesswitch-launch-*")
+	if err != nil {
+		return err
+	}
+	defer log.Close()
+	// The child keeps its descriptor; no log file remains after it exits.
+	if err := os.Remove(log.Name()); err != nil {
+		return err
+	}
+	cmd.Stdout, cmd.Stderr = log, log
+	cmd.Cancel = nil
+	cmd.WaitDelay = 0
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	// Report immediate startup errors, but never wait for the window to close.
+	timer := time.NewTimer(250 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		if err != nil {
+			_, _ = log.Seek(0, io.SeekStart)
+			data, _ := io.ReadAll(io.LimitReader(log, 4096))
+			if message := strings.TrimSpace(string(data)); message != "" {
+				return fmt.Errorf("start WezTerm: %w: %s", err, message)
+			}
+		}
+		return err
+	case <-timer.C:
+		return nil
+	}
 }
 
 func CommandOutputRunner(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -82,7 +128,7 @@ func sessionWithRunners(ctx context.Context, item session.Session, target string
 	if item.Location != nil && target == "auto" {
 		if err := hosts.Focus(ctx, *item.Location, run, output, verify); err == nil {
 			return nil
-		} else if !errors.Is(err, ErrStaleLocation) {
+		} else if !errors.Is(err, ErrStaleLocation) && !errors.Is(err, hosts.ErrSessionNotDisplayed) {
 			return fmt.Errorf("could not focus registered location (not resuming automatically): %w", err)
 		}
 	}
@@ -105,7 +151,7 @@ var providerOpeners = map[string]ProviderOpener{
 type codexOpener struct{}
 
 func (codexOpener) Open(ctx context.Context, item session.Session, target string, run Runner) error {
-	if target == "auto" {
+	if target == "auto" && item.Host != "tmux" && item.Host != "wezterm" {
 		switch sourceHost(item.Source) {
 		case "Codex Desktop":
 			return run(ctx, "open", "codex://threads/"+item.ID)
