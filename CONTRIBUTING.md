@@ -1,28 +1,19 @@
 # Contributing
 
-Thanks for helping improve Sesswitch.
+See [Development](docs/development.md) for setup and required checks, and
+[Architecture](docs/architecture.md) for the provider/host/launcher boundaries.
 
-Before opening a pull request:
+Before submitting:
 
-```sh
-go test ./...
-go vet ./...
-make build
-make check-vicinae-extension
-shellcheck scripts/*.sh
-```
+- Run Go tests with the race detector, `go vet`, a build, extension checks, and
+  shell checks as listed in the developer guide.
+- Add regression coverage for behavior changes, especially process ownership,
+  routing, state transitions, and persistence.
+- Preserve existing JSON fields during the 0.x series; consumers ignore additions.
+- Use synthetic fixtures. Never commit transcripts, prompts, API keys, private
+  paths, or credentials.
+- Update the relevant guide when changing user-facing behavior.
 
-Keep the three main concerns separate:
-
-- Provider adapters discover and normalize sessions.
-- Host adapters verify and focus live surfaces.
-- Launcher adapters render the CLI model and delegate actions back to it.
-
-Please add tests for routing, state, registry, and provider behavior. Never add
-fixtures containing real session transcripts, API keys, prompts, private paths,
-or credentials. When changing `list --json`, preserve existing fields during
-the 0.x series and document any new launcher-facing behavior.
-
-Bug reports are most useful with the Sesswitch version, macOS version, provider
-and host involved, expected behavior, and sanitized command output. Report
-security issues privately as described in [SECURITY.md](SECURITY.md).
+Bug reports should include the Sesswitch/macOS versions, provider and host,
+expected behavior, reproduction steps, and sanitized diagnostics.
+Report security issues privately as described in [SECURITY.md](SECURITY.md).

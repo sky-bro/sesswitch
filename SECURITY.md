@@ -15,6 +15,8 @@ credentials.
 Sesswitch does not need provider API keys. Chrome side-panel routing scans local
 Codex rollouts on demand for selected-tab context and does not persist transcript
 contents or browser URLs.
+Stale terminal binding recovery reads native process arguments on demand to
+check an explicit resume thread ID. Arguments are not logged or persisted.
 Provider hooks accept lifecycle metadata on standard input, normalize the
 fields they need, and store local registry files with mode `0600` under
 `~/.local/state/sesswitch/` by default.

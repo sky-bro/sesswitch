@@ -1,136 +1,94 @@
 # Architecture
 
-Sesswitch normalizes three independent dimensions:
+[Home](../README.md) · [Development](development.md) · [CLI contract](cli.md)
 
-1. **Provider** — owns session discovery and provider-specific resume behavior
-   (`codex`, `claude`).
-2. **Host** — owns the live surface and focus mechanics (`tmux`, `wezterm`, Chrome tabs,
-   later VS Code and other terminals).
-3. **Launcher** — renders and selects normalized sessions (Vicinae today;
-   Raycast and Rofi adapters later).
+## Boundaries
 
-Providers must not focus windows. Hosts must not parse provider history.
-Launchers must call the CLI contract instead of reading provider or registry
-files directly. During the 0.x series, JSON consumers must ignore unknown
-fields so the schema can evolve compatibly.
+**Providers** discover and normalize sessions. **Hosts** verify and focus live
+surfaces. **Launchers** render the model and delegate actions through the CLI.
+Providers must not focus windows; launchers must not read registry or provider
+files directly. Package locations are listed in the [developer guide](development.md#code-layout).
 
-## Current package boundaries
+Codex uses app-server for history and exact thread reads. Claude uses
+hook-observed metadata and `claude --resume`; it does not parse transcript
+internals. Chrome routing reads selected-tab context on demand from the local
+Codex rollout, an unstable format. Tab context is not serialized.
 
-- `internal/providers`: adapter contract, merge, global sort, de-duplication,
-  and result limiting.
-- `internal/providers/codex`: Codex app-server transport and normalization.
-- `internal/providers/claude`: hook-observed Claude session catalog adapter.
-- `internal/hosts`: conservative live tmux discovery plus verified tmux and
-  WezTerm focus behavior, plus Chrome tab activation.
-- `internal/open`: provider fallback routing after live-host focus is not
-  available, plus process execution with stale WezTerm socket recovery.
-- `internal/presentation`: launcher-neutral display fields and the compact
-  plain-text renderer used by dmenu-style launchers.
-- `extensions/vicinae`: native React/TypeScript launcher adapter with provider
-  image assets, subtitles, colored status tags, and actions backed by the Go
-  CLI contract.
-- `internal/registry`: provider-scoped location, activity, and explicit task
-  state.
-- `internal/state`: converts raw runtime observations into user-facing state.
-- `internal/toolenv`: immutable tool selections and child-process environment,
-  shared through context by CLI operations, providers, and hosts.
+## Snapshot and event flow
 
-Registry filenames use `<provider>--<session-id>` so equal native IDs from two
-providers cannot collide. Reads retain compatibility with the original
-unscoped Codex filenames.
+```text
+Provider catalog + process snapshot → local records → initial launcher snapshot
+Provider hooks / task marks → atomic records → filesystem events → watch snapshot
+```
 
-## Live location reconciliation
+Catalog queries and process discovery run on open/manual refresh. `watch`
+subscribes before the initial load, watches directories for atomic replacements,
+and coalesces bursts for 50 ms. Subsequent projections perform no provider
+queries, process probes, or write-back. The view owns the subscription; closing
+it stops the child. There is no polling or automatic reconnect service.
 
-Provider hooks remain the preferred source of terminal coordinates. Some Codex
-versions execute hooks from a managed app-server, so the hook process tree has
-no relationship to the CLI's TTY. For sessions without a registered location,
-the host layer scans live tmux panes and requires all of the following:
+Each provider can fail independently; cached metadata and explicit warnings
+remain available. Vicinae also caches the last successful array by binary path.
+Cached states are advisory: opening revalidates the live target.
 
-- the pane working directory equals the session working directory;
-- the pane title contains the normalized session title;
-- the pane TTY contains a live executable for the same provider; and
-- exactly one pane satisfies those checks.
+## Ownership and recovery
 
-The recovered location carries the agent PID and start time and is subject to
-the normal focus-time identity check. Ambiguous matches are ignored and fall
-back to provider routing rather than risking focus on the wrong conversation.
-For a registered pane, discovery matches the pane ID and process identity
-directly. This refreshes live title-derived state even after a provider-side
-session rename, without weakening the identity check.
-For a verified live Codex pane, `Action Required` in the terminal title is an
-ephemeral host-state signal. It outranks historical turn-ended hook activity
-and is cleared on the next scan when the title no longer requests action.
+A location lease records provider, pane/TTY, PID, and process start time. A live
+CLI may carry several threads. `display_state` separates carrier membership
+from the currently displayed thread: `current`, `background`, or `unknown`.
+Only a unique current conversation-title match inherits the pane's approval
+indicator. Project/path suffixes are excluded from title matching.
+
+Hooks register terminal locations only from a verified CLI ancestor with a TTY.
+Daemon/GUI hooks still record metadata and activity without trusting inherited
+pane variables. Missing locations can be discovered from a unique title/cwd
+match and a live provider process on the pane's TTY.
+
+A changed PID/start time invalidates a registered lease. Recovery additionally
+requires an exact `codex resume <thread-UUID>` argument match, current title/cwd,
+and no competing title or lease on the new process. Native argv is inspected
+only for recovery (Darwin sysctl or Linux procfs) and never retained. The process
+identity/TTY is checked again after reading it. argv describes launch, so it
+never overrides contrary current titles or existing leases after thread switches.
+Picker/`--last`, inaccessible arguments, and ambiguous claims remain unrecovered.
+
+## Opening
+
+For provider-confirmed cached Codex threads, automatic opening first reconciles
+all cached peers and tries a verified current tmux location, independently of
+app-server availability. Hook-only/non-resumable records do not use this shortcut.
+Provider lookup uses exact thread reads and includes cached peers when decorating
+the result. A missing saved thread is never treated as proof that its record is
+necessarily a `/side` conversation.
+
+Focus verifies PID/start/provider/TTY and rechecks the conversation title. It
+reuses an attached tmux client in WezTerm, or attaches the existing tmux session.
+Stale/background targets can fall back to exact resume; other activation errors
+stop to avoid duplicate agents. A retained `host` records terminal provenance
+without asserting that its old location remains live. A new WezTerm GUI detaches
+from request cancellation, process groups, and output pipes.
+
+`--target host` explicitly focuses the carrier without selecting the thread.
+Chrome focuses the recorded tab ID or a unique exact URL; failures raise Chrome.
+VS Code routing currently raises the application.
+
+## State and persistence
+
+Runtime state, task completion, and host availability are independent. A Stop
+hook means the turn ended. `mark read` acknowledges that turn; `mark done` is an
+explicit task decision. New non-closed activity reopens Done. Browser closure
+does not itself acknowledge a review reminder (see issue #6).
+
+Private JSON records use `<provider>--<id>` names; reads accept legacy unscoped
+records. Writers use atomic replacement; metadata/activity/task updates share a
+file lock. Hook arrival timestamps are captured before process inspection;
+older observations and late tool events cannot overwrite newer turn state.
+This orders observed arrivals, not an invented provider event sequence.
 
 ## Execution environment
 
-`internal/toolenv` resolves configured executables, inherited PATH entries, and
-standard installation directories once per CLI operation. Process commands are
-constructed only through this package; provider and host adapters use the same
-context snapshot. Selection errors are retained for doctor and execution, so a
-bad explicit path cannot be hidden by a fallback.
-
-The execution PATH places the selected Node first and includes selected tool
-directories and fallback directories. Node-shebang agent entrypoints are invoked
-through the selected absolute Node interpreter. WezTerm start/spawn commands
-carry an absolute child command, explicit PATH, and tool/provider configuration
-locations via `env`, since an existing
-GUI can spawn children using its own older environment. The existing stale
-WezTerm socket filter remains scoped to WezTerm calls.
-
-## Exact-key opening and Chrome context
-
-Opening in automatic mode first reads the selected registry coordinate and
-verifies its PID, start time, provider, and TTY. A stale process falls back to
-provider lookup; other focus errors stop the operation to avoid duplicate agents.
-Codex lookup uses `thread/read` with `includeTurns: false`, then decorates only
-that thread. A location verified during current tmux discovery promotes only
-the fallback `saved` state to `session_open` and is cached for later opening.
-
-Host-specific browser/Desktop originators take precedence over the generic
-Codex `vscode` source. For Chrome, the provider adapter reads selected-tab context
-on demand from the rollout path returned by `thread/read`. This is a best-effort
-compatibility path for an unstable local format. The host layer focuses the tab
-ID or a unique exact URL match, passing both as AppleScript arguments. Missing,
-ambiguous, unreadable, or denied targets fall back to raising Chrome. Tab context
-is not serialized into registry records or launcher output.
-
-Vicinae caches its last successful session array by binary path and refreshes it
-in the background. Cached runtime state is advisory; opening still performs host
-verification. Browser liveness and the last turn's review state remain separate
-concerns; closing a tab does not currently expire `turn_ended` activity.
-
-## Adapter contracts
-
-A provider implements:
-
-```go
-type Adapter interface {
-    Name() string
-    List(context.Context, int) ([]session.Session, error)
-}
-```
-
-Each provider adds its own hook subcommand and fallback opener without adding
-provider conditionals to a host adapter. Hook entry points are provider-qualified
-(`sesswitch hook codex`, `sesswitch hook claude`) and registry records carry the
-provider used to verify the live executable.
-
-## Claude integration
-
-Claude sessions are indexed from documented hook events and resumed with
-`claude --resume <session-id>`. Hooks fire in terminal, IDE, Desktop, and cloud
-surfaces, but only a local CLI ancestor supplies a verifiable TTY/pane location.
-The adapter deliberately does not parse transcript internals. Historical
-discovery can be added when a documented machine-readable CLI/API is available.
-
-This creates an explicit capability distinction: Codex currently provides full
-history plus live observations, while Claude provides hook-observed sessions
-plus live observations. The normalized output schema remains the same.
-
-## Persistence
-
-JSON files remain adequate while hooks are the only writers and the data set is
-small. Adopt SQLite behind the registry interface when concurrent providers,
-event history queries, or a watcher daemon make transactions and migrations
-valuable. Do not introduce a daemon until push notifications or continuously
-fresh launcher results require it.
+`internal/toolenv` resolves tools once per command and shares absolute paths,
+configuration, and a child PATH across provider, host, and launcher operations.
+npm agents run through the selected Node. WezTerm children receive explicit
+tool/configuration locations because an existing GUI can have an older
+environment. Only WezTerm calls drop an inherited socket when it no longer exists.
