@@ -30,7 +30,8 @@
   "scripts": {
     "build": "vici build",
     "dev": "vici develop",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test tests/*.test.ts"
   },
   "dependencies": {
     "@vicinae/api": "^0.29.0"

@@ -21,6 +21,8 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { useCallback, useEffect, useState } from "react";
 
+import { type Session, type Organization, type StatusFilter, filterSessions, visibleSessionGroups, projectName, displayProjectPath, providerName, statusFilters } from "./session-model";
+
 const execFileAsync = promisify(execFile);
 type Preferences = { binaryPath?: string };
 
@@ -32,32 +34,9 @@ function expandHome(path: string): string {
 
 const preferences = getPreferenceValues<Preferences>();
 const sesswitch = expandHome(preferences.binaryPath?.trim() || "~/.local/bin/sesswitch");
+const statusFilterStorageKey = "session-status-filter";
 const organizationStorageKey = "session-organization";
 const sessionsCacheStorageKey = `sessions-cache-v1:${sesswitch}`;
-
-type State = {
-  kind: string;
-  source: string;
-  observed_at?: string;
-};
-
-type Location = {
-  kind: string;
-  tmux_pane?: string;
-  needs_attention?: boolean;
-};
-
-type Session = {
-  key: string;
-  provider: string;
-  title: string;
-  cwd?: string;
-  source?: string;
-  updated_at: string;
-  state: State;
-  location?: Location;
-  task?: { kind: string };
-};
 
 function isCachedSession(value: unknown): value is Session {
   if (!value || typeof value !== "object") return false;
@@ -66,7 +45,8 @@ function isCachedSession(value: unknown): value is Session {
     typeof item.title === "string" && typeof item.updated_at === "string" &&
     !!item.state && typeof item.state.kind === "string" && typeof item.state.source === "string" &&
     (item.cwd === undefined || typeof item.cwd === "string") &&
-    (item.source === undefined || typeof item.source === "string");
+    (item.source === undefined || typeof item.source === "string") &&
+    (item.host === undefined || typeof item.host === "string");
 }
 
 type Status = {
@@ -74,17 +54,11 @@ type Status = {
   color: Color;
 };
 
-type Organization = "focus" | "recent" | "project" | "agent";
-
-type SessionGroup = {
-  key: string;
-  title: string;
-  sessions: Session[];
-};
-
 function statusFor(session: Session): Status {
   if (session.task?.kind === "done") return { label: "Done", color: Color.Green };
   switch (session.state.kind) {
+    case "needs_input":
+      return { label: "Needs input", color: Color.Orange };
     case "needs_approval":
       return { label: "Action needed", color: Color.Orange };
     case "working":
@@ -119,116 +93,14 @@ function providerIcon(provider: string) {
   return Icon.Terminal;
 }
 
-function providerName(provider: string): string {
-  if (provider === "codex") return "Codex";
-  if (provider === "claude") return "Claude";
-  return provider;
-}
-
-function projectName(cwd?: string): string {
-  if (!cwd) return "Unknown project";
-  const parts = cwd.split("/").filter(Boolean);
-  return parts.at(-1) ?? cwd;
-}
-
-function updatedAt(session: Session): number {
-  const value = Date.parse(session.updated_at);
-  return Number.isNaN(value) ? 0 : value;
-}
-
-function focusRank(session: Session): number {
-  if (session.task?.kind === "done") return 8;
-  switch (session.state.kind) {
-    case "needs_approval":
-      return 0;
-    case "error":
-    case "interrupted":
-      return 1;
-    case "turn_ended":
-      return 2;
-    case "working":
-      return 3;
-    case "session_open":
-    case "idle":
-      return 4;
-    case "closed":
-      return 7;
-    default:
-      return 6;
-  }
-}
-
-function sortByFocus(sessions: Session[]): Session[] {
-  return [...sessions].sort((left, right) => focusRank(left) - focusRank(right) || updatedAt(right) - updatedAt(left));
-}
-
-function sortByRecent(sessions: Session[]): Session[] {
-  return [...sessions].sort((left, right) => updatedAt(right) - updatedAt(left));
-}
-
-function groupedBy(sessions: Session[], keyFor: (session: Session) => string): SessionGroup[] {
-  const groups = new Map<string, Session[]>();
-  for (const session of sessions) {
-    const key = keyFor(session);
-    groups.set(key, [...(groups.get(key) ?? []), session]);
-  }
-  return [...groups.entries()]
-    .map(([key, items]) => ({ key, title: key, sessions: sortByFocus(items) }))
-    .sort((left, right) => {
-      const rank = focusRank(left.sessions[0]) - focusRank(right.sessions[0]);
-      if (rank !== 0) return rank;
-      return updatedAt(right.sessions[0]) - updatedAt(left.sessions[0]) || left.title.localeCompare(right.title);
-    });
-}
-
-function organizeSessions(sessions: Session[], organization: Organization): SessionGroup[] {
-  if (organization === "recent") {
-    return [{ key: "recent", title: "Recent", sessions: sortByRecent(sessions) }];
-  }
-  if (organization === "project") {
-    return groupedBy(sessions, (session) => projectName(session.cwd));
-  }
-  if (organization === "agent") {
-    return groupedBy(sessions, (session) => providerName(session.provider));
-  }
-
-  const definitions: Array<{ key: string; title: string; matches: (session: Session) => boolean }> = [
-    {
-      key: "needs-you",
-      title: "Needs You",
-      matches: (session) => session.task?.kind !== "done" && ["needs_approval", "error", "interrupted", "turn_ended"].includes(session.state.kind),
-    },
-    {
-      key: "active",
-      title: "Active",
-      matches: (session) => session.task?.kind !== "done" && ["working", "session_open", "idle"].includes(session.state.kind),
-    },
-    {
-      key: "recent",
-      title: "Recent",
-      matches: (session) => session.task?.kind !== "done",
-    },
-    {
-      key: "done",
-      title: "Done",
-      matches: (session) => session.task?.kind === "done",
-    },
-  ];
-  const remaining = new Set(sessions);
-  const groups: SessionGroup[] = [];
-  for (const definition of definitions) {
-    const items = sortByFocus([...remaining].filter(definition.matches));
-    for (const item of items) remaining.delete(item);
-    if (items.length > 0) groups.push({ key: definition.key, title: definition.title, sessions: items });
-  }
-  return groups;
-}
-
 function destination(session: Session): string {
   if (session.location?.kind === "tmux") {
-    return session.location.tmux_pane ? `tmux ${session.location.tmux_pane}` : "tmux";
+    const pane = session.location.tmux_pane ? `tmux ${session.location.tmux_pane}` : "tmux";
+    return session.location.display_state === "background" ? `${pane} · another session displayed` : pane;
   }
   if (session.location?.kind === "wezterm") return "WezTerm";
+  if (session.host === "tmux") return "tmux";
+  if (session.host === "wezterm") return "WezTerm";
   const source = session.source?.toLowerCase() ?? "";
   if (source.includes("vscode") || source.includes("vs code")) return "VS Code";
   if (source.includes("chrome")) return "Chrome";
@@ -240,8 +112,8 @@ function destination(session: Session): string {
 }
 
 function destinationIcon(session: Session) {
-  if (session.location?.kind === "tmux") return join(environment.assetsPath, "tmux.svg");
-  if (session.location?.kind === "wezterm") return applicationIcon("/Applications/WezTerm.app", Icon.Terminal);
+  if ((session.location?.kind ?? session.host) === "tmux") return join(environment.assetsPath, "tmux.svg");
+  if ((session.location?.kind ?? session.host) === "wezterm") return applicationIcon("/Applications/WezTerm.app", Icon.Terminal);
   const source = session.source?.toLowerCase() ?? "";
   if (source.includes("vscode") || source.includes("vs code")) {
     return applicationIcon("/Applications/Visual Studio Code.app", Icon.Code);
@@ -261,17 +133,18 @@ function applicationIcon(path: string, fallback: Icon) {
   return process.platform === "darwin" && existsSync(path) ? { fileIcon: path } : fallback;
 }
 
-async function openSession(session: Session) {
+async function openSession(session: Session, target?: "host") {
   const toast = await showToast({
     title: `Opening ${session.title}`,
     style: Toast.Style.Animated,
   });
   try {
-    await execFileAsync(sesswitch, ["open", session.key], { timeout: 20_000 });
+    await execFileAsync(sesswitch, target ? ["open", "--target", target, session.key] : ["open", session.key], { timeout: 20_000 });
     await closeMainWindow({ clearRootSearch: true });
   } catch (error) {
     toast.title = "Could not open session";
-    toast.message = error instanceof Error ? error.message : String(error);
+    const stderr = error && typeof error === "object" && "stderr" in error ? String(error.stderr ?? "").trim() : "";
+    toast.message = stderr.replace(/^sesswitch:\s*/, "") || (error instanceof Error ? error.message : String(error));
     toast.style = Toast.Style.Failure;
   }
 }
@@ -333,9 +206,12 @@ export default function AISessions() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string>();
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [organization, setOrganization] = useState<Organization>("focus");
   const [revision, setRevision] = useState(0);
   const [warning, setWarning] = useState<string>();
+  const [searchText, setSearchText] = useState("");
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
 
   // Refresh is explicit: restart the subscription and obtain a fresh catalog.
   const reload = useCallback(async () => {
@@ -346,11 +222,13 @@ export default function AISessions() {
   useEffect(() => {
     let cancelled = false;
     let received = false;
+    let failed = false;
     let buffer = "";
     let diagnostics = "";
     const child = spawn(sesswitch, ["watch"], { stdio: ["ignore", "pipe", "pipe"] });
     const fail = (message: string) => {
-      if (cancelled) return;
+      if (cancelled || failed) return;
+      failed = true;
       setIsLoading(false);
       setError(message);
       void showToast({ title: "Session updates stopped", message, style: Toast.Style.Failure });
@@ -398,11 +276,14 @@ export default function AISessions() {
   }, [revision]);
 
   useEffect(() => {
+    void LocalStorage.getItem<string>(statusFilterStorageKey).then((stored) => {
+      if (statusFilters.some((filter) => filter.key === stored)) setStatusFilter(stored as StatusFilter);
+    }).catch(() => undefined);
     void LocalStorage.getItem<string>(organizationStorageKey).then((stored) => {
       if (stored === "focus" || stored === "recent" || stored === "project" || stored === "agent") {
         setOrganization(stored);
       }
-    });
+    }).catch(() => undefined);
   }, []);
 
   const changeOrganization = useCallback((value: Organization) => {
@@ -417,23 +298,55 @@ export default function AISessions() {
     void showToast({ title: `Organized by ${next[0].toUpperCase()}${next.slice(1)}`, style: Toast.Style.Success });
   }, [changeOrganization, organization]);
 
-  const groups = organizeSessions(sessions, organization);
+  const changeStatusFilter = (value: StatusFilter) => {
+    setStatusFilter(value);
+    void LocalStorage.setItem(statusFilterStorageKey, value);
+  };
+  const filtered = filterSessions(sessions, statusFilter);
+  const visibleCount = filterSessions(sessions, "all").length;
+  const groups = visibleSessionGroups(sessions, organization, statusFilter, expandedProjects, searchText);
+  const toggleProjectHistory = (key: string) => setExpandedProjects((previous) => {
+    const next = new Set(previous);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    return next;
+  });
+  const listActions = (
+    <ActionPanel.Section title="List">
+      <ActionPanel.Submenu title="Organize By" icon={Icon.AppWindowList} shortcut={{ modifiers: ["cmd", "shift"], key: "g" }}>
+        {(["focus", "recent", "project", "agent"] as Organization[]).map((value) => (
+          <Action key={value} title={value[0].toUpperCase() + value.slice(1)} onAction={() => changeOrganization(value)} />
+        ))}
+      </ActionPanel.Submenu>
+      <ActionPanel.Submenu title="Filter Status" icon={Icon.MagnifyingGlass}>
+        {statusFilters.map((filter) => (
+          <Action key={filter.key} title={`${filter.title} (${filterSessions(sessions, filter.key).length})`} onAction={() => changeStatusFilter(filter.key)} />
+        ))}
+      </ActionPanel.Submenu>
+      <Action title="Cycle Organization" icon={Icon.AppWindowList} shortcut={{ modifiers: ["cmd", "shift"], key: "o" }} onAction={cycleOrganization} />
+      <Action title="Refresh Sessions" icon={Icon.ArrowClockwise} shortcut={Keyboard.Shortcut.Common.Refresh} onAction={() => reload()} />
+    </ActionPanel.Section>
+  );
 
   return (
     <List
       isLoading={isLoading}
+      navigationTitle={`AI Sessions · ${organization[0].toUpperCase()}${organization.slice(1)}${statusFilter === "all" ? "" : ` · ${statusFilters.find((filter) => filter.key === statusFilter)?.title}`}`}
+      actions={<ActionPanel>{listActions}</ActionPanel>}
       searchBarPlaceholder="Search sessions, projects, or agents"
+      searchText={searchText}
+      onSearchTextChange={setSearchText}
+      filtering={true}
       searchBarAccessory={
         <List.Dropdown
-          id="organization"
-          tooltip="Organize Sessions"
+          id="session-organization"
+          tooltip="Organize By"
           value={organization}
           onChange={(value) => changeOrganization(value as Organization)}
         >
-          <List.Dropdown.Item title="Focus" value="focus" />
-          <List.Dropdown.Item title="Recent" value="recent" />
-          <List.Dropdown.Item title="Project" value="project" />
-          <List.Dropdown.Item title="Agent" value="agent" />
+          {(["focus", "recent", "project", "agent"] as Organization[]).map((value) => (
+            <List.Dropdown.Item key={value} title={value[0].toUpperCase() + value.slice(1)} value={value} />
+          ))}
         </List.Dropdown>
       }
     >
@@ -444,11 +357,11 @@ export default function AISessions() {
       ) : null}
       {error && sessions.length === 0 ? (
         <List.EmptyView title="Could not load sessions" description={error} icon={Icon.Warning} />
-      ) : sessions.length === 0 && !isLoading ? (
-        <List.EmptyView title="No AI sessions found" icon={Icon.MagnifyingGlass} />
+      ) : filtered.length === 0 && !isLoading ? (
+        <List.EmptyView title={visibleCount ? "No sessions match this status" : "No AI sessions found"} description={visibleCount ? "Choose Filter Status → All in the actions menu to see every session." : undefined} icon={Icon.MagnifyingGlass} />
       ) : (
         groups.map((group) => (
-          <List.Section key={group.key} title={`${group.title} (${group.sessions.length})`}>
+          <List.Section key={group.key} title={`${group.title} (${group.totalCount})`}>
           {group.sessions.map((session) => {
             const status = statusFor(session);
             const provider = providerName(session.provider);
@@ -461,16 +374,19 @@ export default function AISessions() {
                 title={session.title}
                 subtitle={project}
                 icon={{ value: providerIcon(session.provider), tooltip: provider }}
-                keywords={[project, provider, host, status.label]}
+                keywords={[project, displayProjectPath(session.cwd ?? ""), provider, host, status.label]}
                 accessories={[
                   { icon: destinationIcon(session), tooltip: host },
                   { tag: { value: status.label, color: status.color } },
+                  ...(session.resume === "unavailable" ? [{ text: "No saved data", tooltip: "May be a temporary /side conversation. It cannot be independently resumed; use the original CLI to switch back if it is still available." }] : session.location?.display_state === "background" ? [{ text: "Background", tooltip: "This CLI is currently displaying another session." }] : []),
                 ]}
                 actions={
                   <ActionPanel>
                     <ActionPanel.Section title="Session">
-                      <Action title="Open Session" icon={Icon.ArrowRight} onAction={() => openSession(session)} />
-                      {session.provider === "codex" ? (
+                      {session.resume === "unavailable" ? (
+                        session.location ? <Action title="Go to Original CLI" icon={Icon.Terminal} onAction={() => openSession(session, "host")} /> : <Action title="Session Cannot Be Resumed" icon={Icon.Warning} onAction={() => showToast({ title: "No saved session data", message: "The original CLI is unavailable. This may have been a temporary /side conversation.", style: Toast.Style.Failure })} />
+                      ) : <Action title="Open Session" icon={Icon.ArrowRight} onAction={() => openSession(session)} />}
+                      {session.provider === "codex" && session.resume !== "unavailable" ? (
                         <Action.Push
                           title="Rename Session"
                           icon={Icon.Pencil}
@@ -502,19 +418,11 @@ export default function AISessions() {
                         />
                       )}
                     </ActionPanel.Section>
-                    <ActionPanel.Section title="List">
-                      <Action
-                        title="Cycle Organization"
-                        icon={Icon.AppWindowList}
-                        shortcut={{ modifiers: ["cmd", "shift"], key: "o" }}
-                        onAction={cycleOrganization}
-                      />
-                      <Action
-                        title="Refresh Sessions"
-                        icon={Icon.ArrowClockwise}
-                        shortcut={Keyboard.Shortcut.Common.Refresh}
-                        onAction={() => reload()}
-                      />
+                    {group.historyCount > 0 ? (
+                      <Action title={group.historyExpanded ? "Hide Project History" : "Show Project History"} icon={group.historyExpanded ? Icon.ChevronUp : Icon.ChevronDown} onAction={() => toggleProjectHistory(group.key)} />
+                    ) : null}
+                    {listActions}
+                    <ActionPanel.Section>
                       <Action.CopyToClipboard
                         title="Copy Session Key"
                         shortcut={Keyboard.Shortcut.Common.Copy}
@@ -526,6 +434,21 @@ export default function AISessions() {
               />
             );
           })}
+          {group.historyCount > 0 ? (
+            <List.Item
+              id={`project-history:${group.key}`}
+              title={`${group.historyExpanded ? "Hide" : "Show"} ${group.historyCount} past sessions`}
+              subtitle="Closed, saved, reviewed, or done"
+              icon={group.historyExpanded ? Icon.ChevronUp : Icon.ChevronDown}
+              keywords={[group.title]}
+              actions={
+                <ActionPanel>
+                  <Action title={group.historyExpanded ? "Hide Past Sessions" : "Show Past Sessions"} icon={group.historyExpanded ? Icon.ChevronUp : Icon.ChevronDown} onAction={() => toggleProjectHistory(group.key)} />
+                  {listActions}
+                </ActionPanel>
+              }
+            />
+          ) : null}
           </List.Section>
         ))
       )}

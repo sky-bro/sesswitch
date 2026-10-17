@@ -35,6 +35,7 @@ jobs:
           cache: npm
           cache-dependency-path: extensions/vicinae/package-lock.json
       - run: npm ci
+      - run: npm run test
       - run: npm run typecheck
       - run: npm run build -- --out "$RUNNER_TEMP/sesswitch-vicinae"
 

@@ -13,11 +13,11 @@ check: test build
 	./bin/sesswitch doctor
 
 check-vicinae-extension:
-	cd extensions/vicinae && npm run typecheck && npm run build -- --out "$(CURDIR)/bin/vicinae"
+	cd extensions/vicinae && npm test && npm run typecheck && npm run build -- --out "$(CURDIR)/bin/vicinae"
 
 install-vicinae-extension:
 	cd extensions/vicinae && npm ci && npm run typecheck && npm run build
-	@echo 'If AI Sessions is missing, restart Vicinae: vicinae server --replace'
+	@echo 'If AI Sessions is missing, quit Vicinae and reopen it from Applications.'
 
 install: build
 	mkdir -p "$(HOME)/.local/bin"
