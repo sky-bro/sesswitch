@@ -1,5 +1,7 @@
 # Development
 
+[English](development.md) | [简体中文](zh-CN/development.md)
+
 [Home](../README.md) · [Architecture](architecture.md) · [Contributing](../CONTRIBUTING.md)
 
 Use Go 1.24+, Node.js 24+ with npm, `jq`, and ShellCheck. Local host integration

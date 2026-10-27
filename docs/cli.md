@@ -1,5 +1,7 @@
 # CLI reference
 
+[English](cli.md) | [简体中文](zh-CN/cli.md)
+
 [Home](../README.md) · [Configuration](configuration.md) · [Architecture](architecture.md)
 
 Session keys use `codex:<thread-id>` or `claude:<session-id>`. Copy a key from

@@ -1,5 +1,7 @@
 # Configuration
 
+[English](configuration.md) | [简体中文](zh-CN/configuration.md)
+
 [Home](../README.md) · [User guide](user-guide.md) · [Troubleshooting](troubleshooting.md)
 
 ## Tool paths

@@ -1,5 +1,7 @@
 # Troubleshooting
 
+[English](troubleshooting.md) | [简体中文](zh-CN/troubleshooting.md)
+
 [Home](../README.md) · [User guide](user-guide.md) · [Configuration](configuration.md)
 
 Start with `sesswitch doctor`. It reports tool paths, missing commands, and

@@ -1,5 +1,7 @@
 # Sesswitch for Vicinae
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 The native launcher adapter for Sesswitch. It renders CLI snapshots and delegates
 open, rename, and mark actions to the same binary.
 

@@ -1,5 +1,7 @@
 # Architecture
 
+[English](architecture.md) | [简体中文](zh-CN/architecture.md)
+
 [Home](../README.md) · [Development](development.md) · [CLI contract](cli.md)
 
 ## Boundaries

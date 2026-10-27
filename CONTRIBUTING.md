@@ -1,5 +1,7 @@
 # Contributing
 
+[English](CONTRIBUTING.md) | [简体中文](CONTRIBUTING.zh-CN.md)
+
 See [Development](docs/development.md) for setup and required checks, and
 [Architecture](docs/architecture.md) for the provider/host/launcher boundaries.
 
@@ -12,7 +14,8 @@ Before submitting:
 - Preserve existing JSON fields during the 0.x series; consumers ignore additions.
 - Use synthetic fixtures. Never commit transcripts, prompts, API keys, private
   paths, or credentials.
-- Update the relevant guide when changing user-facing behavior.
+- Update both English and Chinese versions of the relevant guide when changing
+  user-facing behavior.
 
 Bug reports should include the Sesswitch/macOS versions, provider and host,
 expected behavior, reproduction steps, and sanitized diagnostics.

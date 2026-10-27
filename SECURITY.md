@@ -1,5 +1,7 @@
 # Security
 
+[English](SECURITY.md) | [简体中文](SECURITY.zh-CN.md)
+
 ## Reporting a vulnerability
 
 Please do not open a public issue for a vulnerability that could expose local

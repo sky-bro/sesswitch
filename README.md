@@ -1,5 +1,7 @@
 # Sesswitch
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 [![CI](https://github.com/sky-bro/sesswitch/actions/workflows/ci.yml/badge.svg)](https://github.com/sky-bro/sesswitch/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -54,6 +56,8 @@ adapters are not yet available.
 - [Troubleshooting](docs/troubleshooting.md): missing sessions and opening failures.
 - [Development](docs/development.md): checks, extension development, and layout.
 - [Architecture](docs/architecture.md): state, ownership, routing, and recovery.
+- [Contributing](CONTRIBUTING.md): checks and contribution guidelines.
+- [Security](SECURITY.md): private vulnerability reporting and local data boundaries.
 
 ## License
 

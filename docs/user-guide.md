@@ -1,5 +1,7 @@
 # User guide
 
+[English](user-guide.md) | [简体中文](zh-CN/user-guide.md)
+
 [Home](../README.md) · [Troubleshooting](troubleshooting.md) · [CLI](cli.md)
 
 ## Install and update
