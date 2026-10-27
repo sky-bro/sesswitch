@@ -377,6 +377,33 @@ func TestClosedTmuxSessionResumesInTerminalDespiteGenericSource(t *testing.T) {
 	}
 }
 
+func TestGUIStartActivatesApplication(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS application activation")
+	}
+	var got []string
+	run := func(_ context.Context, name string, args ...string) error {
+		got = append([]string{name}, args...)
+		return nil
+	}
+	if err := startWezTerm(context.Background(), exec.Command("/usr/bin/true"), run); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"open", "-a", "WezTerm"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestGUIStartDoesNotActivateAfterFailure(t *testing.T) {
+	run := func(context.Context, string, ...string) error {
+		t.Fatal("activated application after startup failed")
+		return nil
+	}
+	if err := startWezTerm(context.Background(), exec.Command("/usr/bin/false"), run); err == nil {
+		t.Fatal("startup failure was hidden")
+	}
+}
+
 func TestGUIStartSurvivesRequestCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -127,6 +127,7 @@ func decorateSessions(ctx context.Context, items []session.Session) ([]session.S
 		}
 		items[index].State = state.ApplyMarks(items[index], state.ResolveWithVerifier(ctx, items[index], processes.Verify))
 	}
+	codex.AddTitleHistory(ctx, items)
 	discovered := hosts.DiscoverTmuxLocations(ctx, items, openagent.CommandOutputRunner, processes.AgentAtTTY, process.ResumedThreadMatches)
 	for index := range items {
 		if location, ok := discovered[items[index].Key]; ok {

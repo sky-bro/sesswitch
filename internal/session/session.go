@@ -64,4 +64,7 @@ type Session struct {
 	Activity     *Activity `json:"activity,omitempty"`
 	State        State     `json:"state"`
 	Task         *Task     `json:"task,omitempty"`
+	// TitleAliases are optional provider metadata used only to reconcile a
+	// verified live lease after rename. They are never serialized or displayed.
+	TitleAliases []string `json:"-"`
 }

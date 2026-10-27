@@ -11,7 +11,7 @@ Provider credentials are not needed for the test suite.
 From the repository root:
 
 ```sh
-make test                         # Go tests and hook installer tests
+make test                         # Go, hook installer, and recovery script tests
 go test -race ./...
 go vet ./...
 make build

@@ -39,6 +39,15 @@ from the currently displayed thread: `current`, `background`, or `unknown`.
 Only a unique current conversation-title match inherits the pane's approval
 indicator. Project/path suffixes are excluded from title matching.
 
+An externally renamed Codex thread can leave an already-running TUI emitting
+its old terminal title. On refresh/open, optional name history is read from
+`$CODEX_HOME/session_index.jsonl` (default `~/.codex`), an unstable local format.
+Old names apply only to an existing lease with unchanged verified PID/start/TTY,
+matching cwd, and no peer with the same current or historical name. They cannot
+discover a new lease or recover a replaced process. The launcher shows the new
+name; focus rechecks the actual old title. Missing history keeps conservative
+current-title matching. Historical alias lists are not serialized in Sesswitch records.
+
 Hooks register terminal locations only from a verified CLI ancestor with a TTY.
 Daemon/GUI hooks still record metadata and activity without trusting inherited
 pane variables. Missing locations can be discovered from a unique title/cwd

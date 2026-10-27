@@ -9,9 +9,18 @@ Codex app-server connectivity. Share sanitized output when reporting a bug.
 
 1. Check `vicinae ping`. If it cannot connect, launch Vicinae from Applications.
 2. If Vicinae runs but AI Sessions fails, check its logs for extension errors.
-3. If `extension-manager.js` is missing or the extension manager crashed, quit
-   Vicinae completely and reopen it from Applications.
+3. If `extension-manager.js` is missing or the extension manager crashed, run
+   **Repair AI Sessions** from the Launcher or its assigned shortcut. This native
+   script restarts Vicinae and reopens AI Sessions without using its extension
+   manager. Install it with `make install-vicinae-repair` if it is missing.
 4. Verify the AI Sessions hotkey and **Sesswitch Binary** preference.
+
+The suggested repair shortcut is **Cmd+Option+Shift+Space** on macOS. It restarts
+the entire Launcher, so other open extension views also close. Recovery logs are
+in `~/.local/state/sesswitch/vicinae-repair.log` (respecting `XDG_STATE_HOME`).
+If repair fails, quit Vicinae and reopen it from Applications. **AI Sessions
+(Legacy)** or `sesswitch pick` provides a searchable fallback without the
+extension manager.
 
 On macOS, use the normal application launch for a persistent Vicinae instance.
 A foreground `vicinae server --replace` stays attached to the terminal or tool

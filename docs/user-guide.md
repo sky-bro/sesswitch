@@ -59,12 +59,20 @@ are remembered; an active status filter appears in the bottom title.
 | Shortcut | Action |
 | --- | --- |
 | Return | Open selected session |
+| `⌘↓` / `⌘↑` | Jump between groups (macOS) |
 | `⌘B` | Open actions (with the configuration below) |
 | `⌘E` | Rename a Codex session |
 | `⌘⇧R` | Mark completed turn read |
 | `⌘⇧D` | Mark task done or clear Done |
 | `⌘⇧G` | Open Organize By |
 | `⌘⇧O` | Cycle grouping |
+
+Group navigation keeps all sessions visible: in Agent view, `⌘↓` jumps to the
+next agent's first session, following the displayed group order. In Project
+and Focus views, it jumps between projects and status groups. `⌘↑` first
+returns to the start of the current group, then moves to the previous group;
+it may first reveal a hidden group header. On Linux, use `Ctrl+↓` / `Ctrl+↑`.
+These are Vicinae's built-in list controls.
 
 Vicinae's own action-panel and dropdown shortcuts are configurable. See
 [configuration](configuration.md#vicinae-shortcuts) if they differ on your setup.

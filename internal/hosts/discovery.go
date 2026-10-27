@@ -70,6 +70,16 @@ func DiscoverTmuxLocations(ctx context.Context, items []session.Session, output 
 				TTY: info.TTY, AgentPID: info.PID, AgentStart: info.Start,
 				DisplayState: "background", ThreadTitle: item.Title, LastSeen: time.Now().UTC(),
 			}
+			if registered && item.Provider == "codex" &&
+				item.Location.AgentPID == info.PID && item.Location.AgentStart != "" && item.Location.AgentStart == info.Start &&
+				process.NormalizeTTY(item.Location.TTY) == info.TTY && item.CWD != "" && samePath(item.CWD, pane.cwd) &&
+				!paneTitleMatches(conversationTitle(pane), item.Title) {
+				if title := unambiguousHistoricalTitle(item, items, pane); title != "" {
+					// Focus must recheck the title actually emitted by this TUI,
+					// while the launcher continues to show the current name.
+					location.ThreadTitle = title
+				}
+			}
 			if item.Location != nil {
 				location.WezTermPane = item.Location.WezTermPane
 			}
@@ -87,7 +97,7 @@ func DiscoverTmuxLocations(ctx context.Context, items []session.Session, output 
 		winner := ""
 		matches := 0
 		for _, owner := range owners {
-			if samePath(owner.CWD, pane.cwd) && paneTitleMatches(conversationTitle(pane), owner.Title) {
+			if samePath(owner.CWD, pane.cwd) && paneTitleMatches(conversationTitle(pane), result[owner.Key].ThreadTitle) {
 				winner = owner.Key
 				matches++
 			}
@@ -108,6 +118,37 @@ func DiscoverTmuxLocations(ctx context.Context, items []session.Session, output 
 		}
 	}
 	return result
+}
+
+// Old names can identify the displayed thread only within an unchanged,
+// independently verified lease. Even an unregistered or stale peer with the
+// same current/old name makes that evidence ambiguous.
+func unambiguousHistoricalTitle(item session.Session, items []session.Session, pane tmuxPane) string {
+	title := conversationTitle(pane)
+	matched := ""
+	for _, alias := range item.TitleAliases {
+		if paneTitleMatches(title, alias) {
+			matched = alias
+			break
+		}
+	}
+	if matched == "" {
+		return ""
+	}
+	for _, peer := range items {
+		if peer.Key == item.Key || peer.Provider != item.Provider || peer.CWD == "" || !samePath(peer.CWD, pane.cwd) {
+			continue
+		}
+		if paneTitleMatches(title, peer.Title) {
+			return ""
+		}
+		for _, alias := range peer.TitleAliases {
+			if paneTitleMatches(title, alias) {
+				return ""
+			}
+		}
+	}
+	return matched
 }
 
 func uniqueResumedClaim(item session.Session, items []session.Session, pane tmuxPane, info process.Info) bool {

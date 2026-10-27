@@ -1,4 +1,4 @@
-.PHONY: build test check install install-hooks install-codex-hook install-claude-hook install-vicinae-extension check-vicinae-extension
+.PHONY: build test check install install-hooks install-codex-hook install-claude-hook install-vicinae-extension install-vicinae-repair check-vicinae-extension
 
 build:
 	mkdir -p bin
@@ -7,6 +7,7 @@ build:
 test:
 	go test ./...
 	bash scripts/test-install-codex-hook.sh
+	bash scripts/test-repair-ai-sessions.sh
 
 check: test build
 	go vet ./...
@@ -17,7 +18,10 @@ check-vicinae-extension:
 
 install-vicinae-extension:
 	cd extensions/vicinae && npm ci && npm run typecheck && npm run build
-	@echo 'If AI Sessions is missing, quit Vicinae and reopen it from Applications.'
+	bash scripts/install-vicinae-repair.sh
+
+install-vicinae-repair:
+	bash scripts/install-vicinae-repair.sh
 
 install: build
 	mkdir -p "$(HOME)/.local/bin"

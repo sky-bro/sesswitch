@@ -38,6 +38,11 @@ launched through an existing WezTerm inherit explicit tool/configuration paths.
 Set a direct hotkey for **AI Sessions** in Vicinae settings. The extension's
 **Sesswitch Binary** preference defaults to `~/.local/bin/sesswitch`.
 
+`make install-vicinae-extension` also installs the native **Repair AI Sessions**
+script. To install just recovery, run `make install-vicinae-repair`. Assign it
+**Cmd+Option+Shift+Space** in Vicinae settings for quick recovery when the
+extension manager crashes. It restarts Vicinae and reopens AI Sessions.
+
 For the `⌘P` dropdown and `⌘B` actions described in the user guide, merge these
 keybindings into Vicinae's settings using its **Open Config File** command:
 

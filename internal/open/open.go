@@ -30,9 +30,19 @@ func CommandRunner(ctx context.Context, name string, args ...string) error {
 	}
 	cmd.Env = commandEnvironment(name, cmd.Env, wezTermSocketExists)
 	if name == "wezterm" && len(args) > 0 && args[0] == "start" {
-		return launchWezTerm(cmd)
+		return startWezTerm(ctx, cmd, CommandRunner)
 	}
 	return cmd.Run()
+}
+
+func startWezTerm(ctx context.Context, cmd *exec.Cmd, run Runner) error {
+	if err := launchWezTerm(cmd); err != nil {
+		return err
+	}
+	if runtime.GOOS == "darwin" {
+		return run(ctx, "open", "-a", "WezTerm")
+	}
+	return nil
 }
 
 // A new GUI can outlive the launcher request. Keep it out of the request's
