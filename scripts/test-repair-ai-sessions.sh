@@ -23,7 +23,7 @@ else
 fi
 
 # Keep the restart state-machine cases synchronous; timeout behavior is tested above.
-command_timeout() { shift; "$@"; }
+immediate_command() { shift; "$@"; }
 pgrep() { [[ "$running" == true ]]; }
 pkill() { stopped=true; [[ "$stuck" == true ]] || running=false; }
 sleep() { :; }
@@ -47,17 +47,17 @@ reset_case() {
 }
 
 reset_case
-restart_vicinae fake_vicinae
+restart_vicinae fake_vicinae immediate_command
 [[ "$stopped" == true && "$opened" == true && "$launched" == true ]]
 
 reset_case
 running=false
-restart_vicinae fake_vicinae
+restart_vicinae fake_vicinae immediate_command
 [[ "$stopped" == false && "$opened" == true && "$launched" == true ]]
 
 reset_case
 stuck=true
-if restart_vicinae fake_vicinae 2>/dev/null; then
+if restart_vicinae fake_vicinae immediate_command 2>/dev/null; then
   echo 'Expected shutdown timeout to fail' >&2
   exit 1
 fi
@@ -65,7 +65,7 @@ fi
 
 reset_case
 open_fails=true
-if restart_vicinae fake_vicinae; then
+if restart_vicinae fake_vicinae immediate_command; then
   echo 'Expected application launch failure to propagate' >&2
   exit 1
 fi
@@ -73,7 +73,7 @@ fi
 
 reset_case
 ready=false
-if restart_vicinae fake_vicinae 2>/dev/null; then
+if restart_vicinae fake_vicinae immediate_command 2>/dev/null; then
   echo 'Expected readiness timeout to fail' >&2
   exit 1
 fi
@@ -82,17 +82,17 @@ fi
 # A second repair worker must not interrupt a repair that is already running.
 reset_case
 shlock() { return 1; }
-repair_worker fake_vicinae "$test_dir" >/dev/null
+repair_worker fake_vicinae "$test_dir" immediate_command >/dev/null
 [[ "$stopped" == false && "$opened" == false ]]
 
 # Successful workers release their lock, including when restart fails.
 shlock() { echo "$$" > "$4"; }
 reset_case
-repair_worker fake_vicinae "$test_dir" >/dev/null
+repair_worker fake_vicinae "$test_dir" immediate_command >/dev/null
 [[ ! -e "$test_dir/vicinae-repair.lock" ]]
 reset_case
 open_fails=true
-if repair_worker fake_vicinae "$test_dir" >/dev/null; then
+if repair_worker fake_vicinae "$test_dir" immediate_command >/dev/null; then
   echo 'Expected worker failure to propagate' >&2
   exit 1
 fi

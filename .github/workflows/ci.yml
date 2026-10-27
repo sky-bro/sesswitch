@@ -44,6 +44,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: shellcheck --version
       - run: shellcheck scripts/*.sh
       - run: bash scripts/test-install-codex-hook.sh
       - run: bash scripts/test-repair-ai-sessions.sh

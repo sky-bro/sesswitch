@@ -25,7 +25,7 @@ command_timeout() {
 }
 
 restart_vicinae() {
-  local vicinae="$1" user_id attempt deadline
+  local vicinae="$1" run_command="${2:-command_timeout}" user_id attempt deadline
   user_id="$(id -u)"
   if pgrep -u "$user_id" -x Vicinae >/dev/null; then
     if ! pkill -TERM -u "$user_id" -x Vicinae; then
@@ -46,11 +46,11 @@ restart_vicinae() {
     return 1
   fi
 
-  command_timeout 5 open -a "${SESSWITCH_VICINAE_APP:-Vicinae}" || return 1
+  "$run_command" 5 open -a "${SESSWITCH_VICINAE_APP:-Vicinae}" || return 1
   deadline=$((SECONDS + 10))
   for ((attempt = 0; attempt < 100 && SECONDS < deadline; attempt++)); do
-    if command_timeout 1 "$vicinae" ping >/dev/null 2>&1; then
-      command_timeout 5 "$vicinae" cmd launch '@sky-bro/sesswitch:ai-sessions'
+    if "$run_command" 1 "$vicinae" ping >/dev/null 2>&1; then
+      "$run_command" 5 "$vicinae" cmd launch '@sky-bro/sesswitch:ai-sessions'
       return $?
     fi
     sleep 0.1
@@ -71,7 +71,7 @@ repair_worker() (
   # Let the Launcher finish its script callback before terminating its process.
   sleep 0.3
   echo "$(date '+%Y-%m-%d %H:%M:%S') Restarting Vicinae"
-  restart_vicinae "$vicinae"
+  restart_vicinae "$vicinae" "${3:-command_timeout}"
 )
 
 main() {
